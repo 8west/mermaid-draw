@@ -14,6 +14,8 @@ Phase 2: Implementing this as a vscode extension that can be activated from with
 
 Details of the sub-projects are in [`docs/MonoRepo.md`](docs/MonoRepo.md)
 
+Build, test, or deploy the website: see [`README.md`](README.md).
+
 ## Tech Stack
 
 Tech used is documented in [`docs/TechStack.md`](docs/TechStack.md)
@@ -21,10 +23,6 @@ Tech used is documented in [`docs/TechStack.md`](docs/TechStack.md)
 ## Coding Standards
 
 Coding standards are documented in [`docs/CodingStandards.md`](docs/CodingStandards.md)
-
-## Ubiquitous Language
-
-Terminology is maintained in [`docs/Glossary.md`](docs/Glossary.md)
 
 ## Agent Persona
 
@@ -44,4 +42,4 @@ For triage roles and their tracker labels, see `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context domain docs use `docs/Glossary.md` and `docs/adr/`. See `docs/agents/domain.md`.
+When working with domain terminology or decisions, see [`docs/agents/domain.md`](docs/agents/domain.md).
