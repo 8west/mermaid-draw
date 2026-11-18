@@ -1,0 +1,11 @@
+### Node
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# dotenv environment variable files
+.env
+.env.local
+.env.*.local

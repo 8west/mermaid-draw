@@ -1,0 +1,26 @@
+{
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Mermaid diagram drawing tool using Excalidraw for UI",
+  "keywords": [
+    "Mermaid",
+    "Excalidraw",
+    "Diagram"
+  ],
+  "author": "Russ Painter",
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.21.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.21.0",
+  "workspaces": [
+    "packages/*"
+  ]
+}
