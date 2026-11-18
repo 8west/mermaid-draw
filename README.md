@@ -4,7 +4,7 @@
 </div>
 <p align="center"><strong>Draw Mermaid flowcharts without leaving Mermaid behind.</strong></p>
 <p align="center">
-  <a href="https://YOUR-GITHUB-OWNER.github.io/MermaidDraw/" target="_blank" rel="noopener noreferrer"><strong>Try it in your browser</strong></a> &nbsp;·&nbsp;
+  <a href="https://8west.github.io/mermaid-draw/" target="_blank" rel="noopener noreferrer"><strong>Try it in your browser</strong></a> &nbsp;·&nbsp;
   <a href="#quick-start">Quick start</a> &nbsp;·&nbsp;
   <a href="#develop">Develop</a>
 </p>
