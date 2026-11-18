@@ -6,25 +6,28 @@ import '@excalidraw/excalidraw/index.css';
 import { parseMermaidToExcalidraw } from '@excalidraw/mermaid-to-excalidraw';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import source from '../../../tests/flow_chart/flow_chart1.mermaid?raw';
-import { readCanvasExtras, remapCanvasReferences, writeCanvasExtras } from './prototypeCanvasExtras';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { readCanvasExtras, remapCanvasReferences, writeCanvasExtras } from '@mermaid-draw/core/canvas-extras';
 import {
-  ARCHITECT_ROUGHNESS, chooseNodeId, getArrowLayout, getRelationshipSyntax, isSimpleLabel, readFlowchart, removeNodes,
-  renameNewNode, restorePositions, writeArrow, writeLabel, writeNodeStyle, writePosition, writeRelationship,
-} from './prototypeFlowchart';
+  ARCHITECT_ROUGHNESS, appearanceOverrides, chooseNodeId, getArrowLayout, getRelationshipSyntax, isSimpleLabel, readFlowchart, removeNodes,
+  removeRelationship, renameNewNode, restorePositions, writeArrow, writeLabel, writeNodeStyle, writePosition, writeRelationship,
+} from '@mermaid-draw/core/flowchart';
 
+const props = defineProps<{ initialSource: string; active: boolean; layoutSignal: string }>();
+const emit = defineEmits<{ state: [state: { source: string; busy: boolean; status: string; error: string }] }>();
 const canvasHost = ref<HTMLDivElement | null>(null);
-const draft = ref(source);
-const applied = ref('');
-const busy = ref(false);
-const dirty = computed(() => draft.value !== applied.value);
-const downloadUrl = computed(() => `data:text/plain;charset=utf-8,${encodeURIComponent(applied.value)}`);
+const applied = ref(props.initialSource);
+const busy = ref(true);
 const status = ref('Loading Mermaid...');
 const error = ref('');
 const canvasError = ref('');
-function nodeSnapshot({ x, y, width, height, roundness, roughness, strokeColor, backgroundColor, strokeWidth }: ExcalidrawElement) {
-  return { x, y, width, height, roundness, roughness, strokeColor, backgroundColor, strokeWidth };
+watch([applied, busy, status, error, canvasError], ([source, working, message, sourceFailure, canvasFailure]) => {
+  emit('state', { source, busy: working, status: message, error: sourceFailure || canvasFailure });
+}, { immediate: true });
+function nodeSnapshot(element: ExcalidrawElement) {
+  const { x, y, width, height, roundness, roughness, strokeColor, backgroundColor, strokeWidth } = element;
+  return { x, y, width, height, roundness, roughness, strokeColor, backgroundColor, strokeWidth,
+    appearance: appearanceOverrides(element) };
 }
 
 let nodes = new Map<string, ReturnType<typeof nodeSnapshot>>();
@@ -44,15 +47,18 @@ let canvasExtrasBaseline = '';
 let editor: Root | undefined;
 let api: ExcalidrawImperativeAPI | undefined;
 
+// Activating a tab or showing a notice above the canvas can move it without resizing it.
+watch([() => props.active, () => props.layoutSignal, error, canvasError], () => {
+  if (props.active && !error.value) api?.refresh();
+}, { flush: 'post' });
+
 async function applySource() {
-  if (busy.value) return;
   busy.value = true;
-  error.value = '';
   canvasError.value = '';
-  const input = draft.value;
+  const input = props.initialSource;
   try {
     const extras = readCanvasExtras(input);
-    const diagram = readFlowchart(extras.mermaid);
+    const diagram = readFlowchart(input);
     const parsed = diagram.nodeIds.size ? await parseMermaidToExcalidraw(extras.mermaid) : undefined;
     if (!canvasHost.value) return;
     const converted = parsed ? convertToExcalidrawElements(parsed.elements, { regenerateIds: false }) : [];
@@ -104,12 +110,9 @@ async function applySource() {
         snapshot: JSON.stringify(getArrowLayout(arrow, start, end)),
       });
     }
-    applied.value = input;
-    status.value = `Source applied. ${nodes.size} nodes.`;
     if (api) {
       if (Object.keys(sceneFiles).length) api.addFiles(Object.values(sceneFiles));
       api.updateScene({ elements: scene, captureUpdate: CaptureUpdateAction.NEVER });
-      if (scene.length) api.scrollToContent(scene);
     } else {
       editor = createRoot(canvasHost.value);
       editor.render(createElement(Excalidraw, {
@@ -122,16 +125,20 @@ async function applySource() {
         onChange: syncCanvas,
       }));
     }
+    error.value = '';
+    await nextTick();
+    if (scene.length) api?.scrollToContent(scene);
+    applied.value = diagram.source;
+    status.value = `Source applied. ${nodes.size} nodes.${diagram.repairs.length ? ` Repaired metadata: ${diagram.repairs.join('; ')}.` : ''}`;
   } catch (failure) {
     error.value = failure instanceof Error ? failure.message : String(failure);
-    status.value = 'Source not applied. The last valid canvas is unchanged.';
   } finally {
     busy.value = false;
   }
 }
 
 function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, files: BinaryFiles) {
-  if (busy.value || dirty.value || state.isLoading || state.selectedElementsAreBeingDragged
+  if (busy.value || error.value || state.isLoading || state.selectedElementsAreBeingDragged
     || state.isResizing || state.cursorButton === 'down') return;
   const live = new Map(elements.filter(({ isDeleted }) => !isDeleted).map((element) => [element.id, element]));
   const deleted = new Set<string>();
@@ -151,9 +158,12 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
       labels.delete(id);
     } else {
       const snapshot = nodeSnapshot(after);
+      const appearanceChanged = before.appearance?.fillStyle !== snapshot.appearance?.fillStyle
+        || before.appearance?.strokeStyle !== snapshot.appearance?.strokeStyle
+        || before.appearance?.opacity !== snapshot.appearance?.opacity;
       if (before.x !== after.x || before.y !== after.y || before.width !== after.width || before.height !== after.height
-        || before.roundness?.type !== after.roundness?.type || before.roughness !== after.roughness) {
-        updated = writePosition(updated, nodeId, after);
+        || before.roundness?.type !== after.roundness?.type || before.roughness !== after.roughness || appearanceChanged) {
+        updated = writePosition(updated, nodeId, snapshot);
         geometryWritten = true;
       }
       if (before.strokeColor !== after.strokeColor || before.backgroundColor !== after.backgroundColor
@@ -180,10 +190,11 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
       usedIds.add(id);
       nodeIds.set(element.id, id);
       if (drawnLabel === undefined) unnamedNodes.add(element.id);
-      nodes.set(element.id, nodeSnapshot(element));
+      const snapshot = nodeSnapshot(element);
+      nodes.set(element.id, snapshot);
       labels.set(element.id, label);
       updated = writeLabel(updated, id, label);
-      updated = writePosition(updated, id, element);
+      updated = writePosition(updated, id, snapshot);
       updated = writeNodeStyle(updated, id, element);
       nodeAdded = true;
     }
@@ -194,10 +205,14 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
       ? [[element.containerId, element.originalText]]
       : [],
   ));
+  const removedEdges = new Set<string>();
   for (const [id, edge] of edgeEndpoints) {
-    if (deleted.has(edge.start) || deleted.has(edge.end)) continue;
     const arrow = live.get(id);
-    if (arrow?.type !== 'arrow') continue;
+    if (deleted.has(edge.start) || deleted.has(edge.end) || arrow?.type !== 'arrow') {
+      updated = removeRelationship(updated, edge.sourceEndpoints);
+      removedEdges.add(id);
+      continue;
+    }
     const route = getArrowLayout(arrow, edge.start, edge.end);
     const snapshot = JSON.stringify(route);
     const startHead = Boolean(arrow.startArrowhead);
@@ -247,109 +262,60 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
       }
     }
   }
+  const deletedElements = new Set([...removedEdges, ...elements.filter(({ isDeleted }) => isDeleted).map(({ id }) => id)]);
   const extras = [...live.values()].filter((element) => !nodes.has(element.id) && !edgeEndpoints.has(element.id)
     && !(element.type === 'text' && element.containerId
       && (nodes.has(element.containerId) || edgeEndpoints.has(element.containerId))));
-  const remappedExtras = extras.map((element) => remapCanvasReferences(element, nodeIds));
+  const remappedExtras = extras.map((element) => remapCanvasReferences(element, nodeIds, deletedElements));
   const nextExtras = writeCanvasExtras('', remappedExtras, files);
   if (nextExtras !== canvasExtrasBaseline) {
     updated = writeCanvasExtras(updated, remappedExtras, files);
     canvasExtrasBaseline = nextExtras;
   }
   if (updated === applied.value) return;
-  draft.value = applied.value = updated;
+  applied.value = updated;
   const change = deleted.size ? 'Node deletion' : nodeAdded ? 'New node' : labelWritten ? 'Node label'
-    : geometryWritten ? 'Node layout' : styleWritten ? 'Node style' : arrowWritten ? 'Relationship' : 'Canvas change';
+    : removedEdges.size ? 'Relationship deletion' : geometryWritten ? 'Node layout' : styleWritten ? 'Node style'
+    : arrowWritten ? 'Relationship' : 'Canvas change';
   status.value = `${change} written to Mermaid. ${nodes.size} nodes.`;
 
-  if (deleted.size && api) {
-    const dangling = new Set<string>();
-    for (const [id, { start, end }] of edgeEndpoints) {
-      if (deleted.has(start) || deleted.has(end)) {
-        dangling.add(id);
-        edgeEndpoints.delete(id);
-      }
-    }
-    if (dangling.size) {
-      api.updateScene({
-        elements: elements.map((element) => dangling.has(element.id) ? { ...element, isDeleted: true } : element),
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-    }
+  for (const id of removedEdges) edgeEndpoints.delete(id);
+  if (removedEdges.size && api) {
+    api.updateScene({
+      elements: elements.map((element) => removedEdges.has(element.id)
+        || (element.type === 'text' && element.containerId && removedEdges.has(element.containerId))
+        ? { ...element, isDeleted: true } : element),
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
   }
 }
 
 onMounted(applySource);
 onBeforeUnmount(() => editor?.unmount());
+
 </script>
 
 <template>
-  <main>
-    <header>
-      <h1>MermaidDraw rendering POC</h1>
-      <p>Draw a rectangle to add a Mermaid node. Spare arrows and other drawings stay in a document comment.</p>
-      <p role="status">{{ status }}</p>
-      <p v-if="canvasError" role="alert">{{ canvasError }} The edit was not written to Mermaid.</p>
-    </header>
-    <div ref="canvasHost" class="canvas-host" :inert="busy || dirty"></div>
-    <form @submit.prevent="applySource">
-      <label for="mermaid-source">Mermaid source</label>
-      <p id="source-help">Use simple rectangular nodes and straight arrows. Apply or discard source changes before returning to the canvas.</p>
-      <textarea
-        id="mermaid-source"
-        v-model="draft"
-        :disabled="busy"
-        :aria-invalid="error ? true : undefined"
-        aria-describedby="source-help source-error"
-        rows="6"
-        spellcheck="false"
-        @input="error = ''"
-      ></textarea>
-      <p id="source-error" role="alert">{{ error }}</p>
-      <button type="submit" :disabled="busy">Apply Mermaid</button>
-      <button type="button" :disabled="busy || !dirty" @click="draft = applied; error = ''">Discard source changes</button>
-      <a v-if="applied && !dirty && !canvasError" :href="downloadUrl" download="flow_chart1.mermaid">Download Mermaid</a>
+  <div class="canvas-editor">
+    <p v-if="canvasError" class="diagram-error" role="alert">{{ canvasError }} The edit was not written to Mermaid.</p>
+    <p v-if="error" class="diagram-error" role="alert">{{ error }}</p>
+    <!-- Each canvas has its own form owner so Excalidraw tool radios do not group across tabs. -->
+    <form v-show="!error" class="canvas-frame" @submit.prevent>
+      <div ref="canvasHost" class="canvas-host" :inert="busy"></div>
     </form>
-  </main>
+  </div>
 </template>
 
-<style>
-body {
-  margin: 0;
-  font-family: system-ui, sans-serif;
-}
-
-main {
-  padding: 1rem;
-}
-
-h1 {
-  margin-block: 0;
-}
-
+<style scoped>
+.canvas-editor { display: flex; flex-direction: column; block-size: 100%; }
+.canvas-frame { flex: 1; min-block-size: 0; }
 .canvas-host {
-  block-size: max(24rem, 65dvh);
-  border: 1px solid #aeb8c2;
-  border-radius: 0.5rem;
+  box-sizing: border-box;
+  block-size: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0 0.45rem 0.45rem 0.45rem;
   overflow: hidden;
 }
 
-form {
-  margin-block-start: 1rem;
-}
-
-label {
-  font-weight: 600;
-}
-
-textarea {
-  box-sizing: border-box;
-  display: block;
-  inline-size: 100%;
-  font: 1rem ui-monospace, monospace;
-}
-
-a {
-  margin-inline-start: 0.75rem;
-}
+.diagram-error { margin: 0.2rem 0 0.35rem; color: var(--danger); font-size: 0.875rem; }
 </style>

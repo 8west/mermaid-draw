@@ -1,4 +1,4 @@
 import { createApp } from 'vue';
-import RenderPrototype from './RenderPrototype.vue';
+import DocumentEditor from './DocumentEditor.vue';
 
-createApp(RenderPrototype).mount('#app');
+createApp(DocumentEditor).mount('#app');

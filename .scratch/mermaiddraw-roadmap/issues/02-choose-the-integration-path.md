@@ -1,6 +1,7 @@
 # Choose the Excalidraw integration path
 
 Type: prototype
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -24,3 +25,7 @@ Existing Mermaid relationships round-trip plain single-line canvas labels throug
 Architect is the default stroke style for newly drawn items and Mermaid nodes and arrows without a saved roughness. Explicit roughness is retained in layout comments; canvas-only items keep their original styling.
 
 New nodes use readable IDs such as `payment_review`, with `_2`, `_3`, and so on for collisions. A fresh unlabeled node starts with `node`; its first label can replace that placeholder before a redraw. Later label edits leave the ID stable.
+
+## Answer
+
+Use the stock Excalidraw React component inside Vue and the stock `mermaid-to-excalidraw` converter for the first flowchart release. MermaidDraw owns the reverse sync and source edits. The accepted POC demonstrated round-trip editing for simple flowcharts without either fork. It did not establish support for parallel edges, subgraph membership, or the final layout schema.

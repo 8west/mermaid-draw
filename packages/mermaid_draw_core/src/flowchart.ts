@@ -3,14 +3,21 @@ import type { ExcalidrawElement, ExcalidrawLinearElement } from '@excalidraw/exc
 type Point = [number, number];
 export const ARCHITECT_ROUGHNESS = 0;
 
-type Position = { x: number; y: number; width?: number; height?: number; roundness?: ExcalidrawElement['roundness']; roughness?: number };
-type ArrowLayout = { points: { x: number; y: number }[]; start: boolean; end: boolean; stroke: string; width: number; roughness?: number };
+type Appearance = Partial<Pick<ExcalidrawElement, 'fillStyle' | 'strokeStyle' | 'opacity'>>;
+type Head = NonNullable<ExcalidrawLinearElement['startArrowhead']>;
+type Position = { x: number; y: number; width?: number; height?: number; roundness?: ExcalidrawElement['roundness']; roughness?: number; appearance?: Appearance };
+type ArrowLayout = {
+  points: { x: number; y: number }[]; start: boolean; end: boolean; stroke: string; width: number; roughness?: number;
+  appearance?: Appearance; startArrowhead?: Head; endArrowhead?: Head;
+};
 type NodeStyle = Partial<Pick<ExcalidrawElement, 'strokeColor' | 'backgroundColor' | 'strokeWidth'>>;
 type Diagram = {
   nodeIds: Set<string>;
   positions: Map<string, Position>;
   arrows: Map<string, ArrowLayout>;
   styles: Map<string, NodeStyle>;
+  source: string;
+  repairs: string[];
 };
 
 const endpoint = String.raw`([A-Za-z][\w-]*)(?:\[([^\[\]]+)\])?`;
@@ -64,6 +71,32 @@ function isOptionalRoughness(value: unknown): value is number | undefined {
   return value === undefined || value === 0 || value === 1 || value === 2;
 }
 
+const fillStyles = ['solid', 'hachure', 'cross-hatch', 'zigzag'] as const;
+const strokeStyles = ['solid', 'dashed', 'dotted'] as const;
+const heads: readonly Head[] = ['arrow', 'bar', 'dot', 'circle', 'circle_outline', 'triangle', 'triangle_outline',
+  'diamond', 'diamond_outline', 'crowfoot_one', 'crowfoot_many', 'crowfoot_one_or_many'];
+
+function isOptionalChoice<T extends string>(value: unknown, choices: readonly T[]): value is T | undefined {
+  return value === undefined || choices.some((choice) => choice === value);
+}
+
+function isAppearance(value: unknown): value is Appearance | undefined {
+  return value === undefined || (isRecord(value)
+    && isOptionalChoice(value.fillStyle, fillStyles)
+    && isOptionalChoice(value.strokeStyle, strokeStyles)
+    && (value.opacity === undefined || (isFiniteNumber(value.opacity) && value.opacity >= 0 && value.opacity <= 100)));
+}
+
+/** Return only non-default appearance; exclude all other fields even for full canvas elements. */
+export function appearanceOverrides({ fillStyle, strokeStyle, opacity }: Appearance): Appearance | undefined {
+  const overrides: Appearance = {
+    ...(fillStyle !== undefined && fillStyle !== 'solid' ? { fillStyle } : {}),
+    ...(strokeStyle !== undefined && strokeStyle !== 'solid' ? { strokeStyle } : {}),
+    ...(opacity !== undefined && opacity !== 100 ? { opacity } : {}),
+  };
+  return Object.keys(overrides).length ? overrides : undefined;
+}
+
 function readPosition(payload: string, line: number): Position {
   let value: unknown;
   if (payload.trimStart().startsWith('{')) {
@@ -84,7 +117,10 @@ function readPosition(payload: string, line: number): Position {
   const roundness = value.roundness === null ? null
     : isRecord(value.roundness) && value.roundness.type === 3 ? { type: 3 as const } : undefined;
   if (!isOptionalRoughness(value.roughness)) throw new Error(`Invalid node roughness at line ${line}.`);
-  return { x: value.x, y: value.y, width: value.width, height: value.height, roundness, roughness: value.roughness };
+  if (value.v !== undefined && value.v !== 1) throw new Error(`Unsupported node layout version at line ${line}.`);
+  if (!isAppearance(value.appearance)) throw new Error(`Invalid node appearance at line ${line}.`);
+  return { x: value.x, y: value.y, width: value.width, height: value.height, roundness, roughness: value.roughness,
+    appearance: appearanceOverrides(value.appearance ?? {}) };
 }
 
 function isArrowLayout(value: unknown): value is ArrowLayout {
@@ -93,6 +129,8 @@ function isArrowLayout(value: unknown): value is ArrowLayout {
   return typeof start === 'boolean' && typeof end === 'boolean'
     && typeof stroke === 'string' && color.test(stroke) && typeof width === 'number' && width > 0 && Number.isFinite(width)
     && isOptionalRoughness(roughness)
+    && (value.v === undefined || value.v === 1) && isAppearance(value.appearance)
+    && isOptionalChoice(value.startArrowhead, heads) && isOptionalChoice(value.endArrowhead, heads)
     && Array.isArray(points) && points.length >= 2 && points.every(
       (point) => isRecord(point) && isFiniteNumber(point.x) && isFiniteNumber(point.y),
     );
@@ -109,27 +147,65 @@ export function readFlowchart(source: string): Diagram {
   const arrows = new Map<string, ArrowLayout>();
   const styles = new Map<string, NodeStyle>();
   const edges = new Set<string>();
-  for (const [index, line] of lines.slice(1).entries()) {
+  const repairs: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (index === 0) continue;
+    const connection = line.match(edge);
+    if (connection) {
+      const start = connection[2];
+      const end = connection[6];
+      const key = `${start} ${end}`;
+      if (start === end || edges.has(key)) throw new Error(`Unsupported edge at line ${index + 1}.`);
+      edges.add(key);
+      nodeIds.add(start);
+      nodeIds.add(end);
+    } else {
+      const node = line.match(declaration);
+      if (node?.[2]) nodeIds.add(node[1]);
+    }
+  }
+  for (const [index, line] of lines.entries()) {
+    if (index === 0) continue;
+    const lineNumber = index + 1;
     const position = line.match(layout);
     const route = line.match(arrowLayout);
     const style = line.match(styleLine);
     const connection = line.match(edge);
     const node = line.match(declaration);
     if (position) {
-      const [, id, payload] = position;
-      positions.set(id, readPosition(payload, index + 2));
+      const [, target, payload] = position;
+      const owner = lines[index - 1].match(declaration);
+      const id = nodeIds.has(target) ? target : owner?.[2] ? owner[1] : undefined;
+      if (!id) throw new Error(`Node layout at line ${lineNumber} references missing node ${target}.`);
+      if (positions.has(id)) throw new Error(`Duplicate node layout for ${id} at line ${lineNumber}.`);
+      positions.set(id, readPosition(payload, lineNumber));
+      if (id !== target) {
+        lines[index] = line.replace(/^(\s*%% layout )\S+/, `$1${id}`);
+        repairs.push(`line ${lineNumber}: ${target} -> ${id}`);
+      }
     } else if (line.trimStart().startsWith('%% layout')) {
-      throw new Error(`Invalid layout at line ${index + 2}. Expected: %% layout ID {"x":0,"y":0}.`);
+      throw new Error(`Invalid layout at line ${lineNumber}. Expected: %% layout ID {"x":0,"y":0}.`);
     } else if (route) {
-      const [, start, end, json] = route;
+      const [, oldStart, oldEnd, json] = route;
+      const owner = lines[index - 1].match(edge);
+      const valid = edges.has(`${oldStart} ${oldEnd}`);
+      if (!valid && !owner) throw new Error(`Arrow layout at line ${lineNumber} references missing relationship ${oldStart} -> ${oldEnd}.`);
+      const start = (!valid && owner ? owner[2] : oldStart);
+      const end = (!valid && owner ? owner[6] : oldEnd);
       let value: unknown;
-      try { value = JSON.parse(json); } catch { throw new Error(`Invalid arrow JSON at line ${index + 2}.`); }
-      if (!isArrowLayout(value)) throw new Error(`Invalid arrow layout at line ${index + 2}.`);
+      try { value = JSON.parse(json); } catch { throw new Error(`Invalid arrow JSON at line ${lineNumber}.`); }
+      if (!isArrowLayout(value)) throw new Error(`Invalid or unsupported arrow layout at line ${lineNumber}.`);
+      if (arrows.has(`${start}_${end}`)) throw new Error(`Duplicate arrow layout for ${start} -> ${end} at line ${lineNumber}.`);
       arrows.set(`${start}_${end}`, value);
+      if (!valid) {
+        lines[index] = line.replace(/^(\s*%% arrow )\S+ \S+/, `$1${start} ${end}`);
+        repairs.push(`line ${lineNumber}: ${oldStart} -> ${oldEnd} is now ${start} -> ${end}`);
+      }
     } else if (line.trimStart().startsWith('%% arrow ')) {
-      throw new Error(`Invalid arrow layout at line ${index + 2}.`);
+      throw new Error(`Invalid arrow layout at line ${lineNumber}.`);
     } else if (style) {
       const [, id, properties] = style;
+      if (!nodeIds.has(id)) throw new Error(`Style at line ${lineNumber} references missing node ${id}.`);
       const values = { ...styles.get(id) };
       for (const property of properties.split(',')) {
         const [name, rawValue] = property.split(':').map((part) => part.trim());
@@ -138,23 +214,14 @@ export function readFlowchart(source: string): Diagram {
         else if (value && name === 'fill' && color.test(value)) values.backgroundColor = value;
         else if (value && name === 'stroke-width' && /^\d+(?:\.\d+)?px$/.test(value) && parseFloat(value) > 0) {
           values.strokeWidth = parseFloat(value);
-        } else throw new Error(`Unsupported node style at line ${index + 2}: ${property}.`);
+        } else throw new Error(`Unsupported node style at line ${lineNumber}: ${property}.`);
       }
       styles.set(id, values);
-    } else if (connection) {
-      const [, , start, , , , end] = connection;
-      const key = `${start}_${end}`;
-      if (start === end || edges.has(key)) throw new Error(`Unsupported edge at line ${index + 2}.`);
-      edges.add(key);
-      nodeIds.add(start);
-      nodeIds.add(end);
-    } else if (node?.[2]) {
-      nodeIds.add(node[1]);
-    } else if (line.trim() && !line.trimStart().startsWith('%%')) {
-      throw new Error(`Unsupported syntax at line ${index + 2}. Use A[Label] or A[Label] --> B[Label].`);
+    } else if (!connection && !node?.[2] && line.trim() && !line.trimStart().startsWith('%%')) {
+      throw new Error(`Unsupported syntax at line ${lineNumber}. Use A[Label] or A[Label] --> B[Label].`);
     }
   }
-  return { nodeIds, positions, arrows, styles };
+  return { nodeIds, positions, arrows, styles, source: lines.join('\n'), repairs };
 }
 
 /** Keep surviving endpoints as standalone nodes when deleting an inline edge. */
@@ -175,6 +242,28 @@ export function removeNodes(source: string, deleted: ReadonlySet<string>): strin
   }).join('\n');
 }
 
+/** Remove one directed relationship and its layout without deleting either endpoint. */
+export function removeRelationship(source: string, [start, end]: readonly [string, string]): string {
+  const lines = source.split('\n');
+  const retained = new Set(lines.flatMap((line) => {
+    const connection = line.match(edge);
+    if (connection) return connection[2] === start && connection[6] === end ? [] : [connection[2], connection[6]];
+    const node = line.match(declaration);
+    return node?.[2] ? [node[1]] : [];
+  }));
+  return lines.flatMap((line) => {
+    const note = line.match(arrowLayout);
+    if (note?.[1] === start && note[2] === end) return [];
+    const connection = line.match(edge);
+    if (connection?.[2] !== start || connection[6] !== end) return [line];
+    const [, indent, , fromLabel, , , , toLabel] = connection;
+    return ([[start, fromLabel], [end, toLabel]] as const).flatMap(([id, label]) => {
+      if (label !== undefined) return [`${indent}${id}[${label}]`];
+      return retained.has(id) ? [] : [`${indent}${id}[${id}]`];
+    });
+  }).join('\n');
+}
+
 function writeDirective(source: string, match: (line: string) => boolean, directive: (previous: string) => string): string {
   const lines = source.split('\n');
   let at = lines.length - 1;
@@ -184,12 +273,12 @@ function writeDirective(source: string, match: (line: string) => boolean, direct
   return lines.join('\n');
 }
 
-export function writePosition(source: string, id: string, { x, y, width, height, roundness, roughness }: Position): string {
+export function writePosition(source: string, id: string, { x, y, width, height, roundness, roughness, appearance }: Position): string {
   return writeDirective(source, (line) => line.match(layout)?.[1] === id, (previous) => {
     const payload = previous.match(layout)?.[2]?.trimStart();
     const extra = payload?.startsWith('{') ? JSON.parse(payload) : {};
     return `    %% layout ${id} ${JSON.stringify({
-      ...extra, x, y, width, height,
+      ...extra, v: 1, x, y, width, height, appearance: appearanceOverrides(appearance ?? {}),
       ...(roundness === undefined ? {} : { roundness }),
       ...(roughness === undefined ? {} : { roughness }),
     })}`;
@@ -214,6 +303,9 @@ export function getArrowLayout(arrow: ExcalidrawLinearElement, start: string, en
     stroke: arrow.strokeColor,
     width: arrow.strokeWidth,
     roughness: arrow.roughness,
+    appearance: appearanceOverrides(arrow),
+    startArrowhead: arrow.startArrowhead && arrow.startArrowhead !== 'arrow' ? arrow.startArrowhead : undefined,
+    endArrowhead: arrow.endArrowhead && arrow.endArrowhead !== 'arrow' ? arrow.endArrowhead : undefined,
   };
 }
 
@@ -223,7 +315,8 @@ export function getRelationshipSyntax(
   if (startHead && !endHead) {
     return {
       endpoints: [end, start], operator: '-->',
-      route: { ...route, points: [...route.points].reverse(), start: route.end, end: route.start },
+      route: { ...route, points: [...route.points].reverse(), start: route.end, end: route.start,
+        startArrowhead: route.endArrowhead, endArrowhead: route.startArrowhead },
     };
   }
   return {
@@ -237,7 +330,11 @@ export function writeArrow(source: string, start: string, end: string, route: Ar
     return match?.[1] === start && match[2] === end;
   }, (previous) => {
     const payload = previous.match(arrowLayout)?.[3];
-    return `    %% arrow ${start} ${end} ${JSON.stringify({ ...(payload ? JSON.parse(payload) : {}), ...route })}`;
+    return `    %% arrow ${start} ${end} ${JSON.stringify({
+      ...(payload ? JSON.parse(payload) : {}), ...route, v: 1, appearance: appearanceOverrides(route.appearance ?? {}),
+      startArrowhead: route.startArrowhead === 'arrow' ? undefined : route.startArrowhead,
+      endArrowhead: route.endArrowhead === 'arrow' ? undefined : route.endArrowhead,
+    })}`;
   });
 }
 
@@ -341,7 +438,9 @@ export function restorePositions(elements: readonly ExcalidrawElement[], diagram
           ...element, ...normalizeArrowPoints(saved.points.map(({ x, y }) => [x, y])),
           startBinding: saved.start ? element.startBinding : null,
           endBinding: saved.end ? element.endBinding : null,
-          strokeColor: saved.stroke, strokeWidth: saved.width,
+          strokeColor: saved.stroke, strokeWidth: saved.width, ...appearanceOverrides(saved.appearance ?? {}),
+          startArrowhead: element.startArrowhead ? saved.startArrowhead ?? element.startArrowhead : element.startArrowhead,
+          endArrowhead: element.endArrowhead ? saved.endArrowhead ?? element.endArrowhead : element.endArrowhead,
           roughness: saved.roughness ?? ARCHITECT_ROUGHNESS,
         };
       }
@@ -368,7 +467,7 @@ export function restorePositions(elements: readonly ExcalidrawElement[], diagram
       };
     }
     return {
-      ...element, ...diagram.styles.get(nodeId),
+      ...element, ...diagram.styles.get(nodeId), ...position?.appearance,
       width: position?.width ?? element.width,
       height: position?.height ?? element.height,
       x: position?.x ?? element.x,

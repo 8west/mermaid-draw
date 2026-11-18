@@ -60,14 +60,16 @@ export function writeCanvasExtras(source: string, elements: readonly ExcalidrawE
 }
 
 /** Keep a spare arrow's binding if its target was promoted to a Mermaid node. */
-export function remapCanvasReferences(element: ExcalidrawElement, ids: ReadonlyMap<string, string>): ExcalidrawElement {
+export function remapCanvasReferences(
+  element: ExcalidrawElement, ids: ReadonlyMap<string, string>, deleted: ReadonlySet<string> = new Set(),
+): ExcalidrawElement {
   const remap = (id: string) => ids.get(id) ?? id;
   if (element.type === 'arrow' || element.type === 'line') {
     const { startBinding, endBinding } = element;
     return {
       ...element,
-      startBinding: startBinding && { ...startBinding, elementId: remap(startBinding.elementId) },
-      endBinding: endBinding && { ...endBinding, elementId: remap(endBinding.elementId) },
+      startBinding: startBinding && !deleted.has(startBinding.elementId) ? { ...startBinding, elementId: remap(startBinding.elementId) } : null,
+      endBinding: endBinding && !deleted.has(endBinding.elementId) ? { ...endBinding, elementId: remap(endBinding.elementId) } : null,
     };
   }
   return element;

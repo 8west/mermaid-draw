@@ -1,0 +1,16 @@
+{
+  "name": "@mermaid-draw/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./flowchart": "./src/flowchart.ts",
+    "./document": "./src/diagramDocument.ts",
+    "./canvas-extras": "./src/canvasExtras.ts"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "micromark": "4.0.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}
