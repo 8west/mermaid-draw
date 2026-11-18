@@ -1,4 +1,5 @@
 {
+  "name": "MermaidDraw",
   "type": "module",
   "version": "1.0.0",
   "description": "Mermaid diagram drawing tool using Excalidraw for UI",
@@ -19,8 +20,9 @@
       "onFail": "download"
     }
   },
-  "packageManager": "pnpm@12.21.0",
-  "workspaces": [
-    "packages/*"
-  ]
+  "devDependencies": {
+    "oxlint": "1.94.0",
+    "oxfmt": "0.79.0"
+  },
+  "packageManager": "pnpm@12.21.0"
 }
