@@ -1,6 +1,7 @@
 ### Node
 # Dependencies
 node_modules/
+**/dist/
 
 # Logs
 *.log

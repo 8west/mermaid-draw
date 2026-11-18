@@ -11,6 +11,7 @@
   "author": "Russ Painter",
   "license": "UNLICENSED",
   "scripts": {
+    "poc": "pnpm --filter mermaid-draw-web dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devEngines": {
