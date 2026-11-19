@@ -1,17 +1,67 @@
 import type { convertToExcalidrawElements } from '@excalidraw/excalidraw';
-import type { Arrowhead } from '@excalidraw/excalidraw/element/types';
+import type { Arrowhead, ExcalidrawElement, ExcalidrawTextElement } from '@excalidraw/excalidraw/element/types';
 import { readGraphDiagram } from './graphDiagram.ts';
+import { changedConnectorStyle, isConnectorStyle, readConnectorStyle, writeConnectorStyle, type ConnectorAppearance, type ConnectorStyle } from './connectorStyle.ts';
 
 type Skeleton = NonNullable<Parameters<typeof convertToExcalidrawElements>[0]>[number];
 type Point = { x: number; y: number };
 type Colors = { strokeColor?: string; backgroundColor?: string };
-type CanvasElement = Point & Colors & { id: string; originalText?: string; isDeleted?: boolean };
+type CanvasElement = Point & Colors & ConnectorAppearance & {
+  id: string; originalText?: string; isDeleted?: boolean; fillStyle?: string; roundness?: ExcalidrawElement['roundness'];
+  fontSize?: number; fontFamily?: number; textAlign?: string; verticalAlign?: string;
+};
 type DiagramColors = { fill?: string; stroke?: string; color?: string };
 type Statement = { line: number; id: string; text: string };
 type Participant = Statement & { actor: boolean };
 type SequenceRow = Statement & { from: string; to: string; operator: string; note?: string };
 type ClassBox = Statement & { members: Statement[] };
 type Relationship = SequenceRow & { left?: string; right?: string };
+type FillStyle = 'solid' | 'hachure' | 'cross-hatch' | 'zigzag';
+type NoteTextStyle = Partial<Pick<ExcalidrawTextElement, 'fontSize' | 'fontFamily' | 'textAlign' | 'verticalAlign' | 'opacity'>>;
+type NoteFormatting = {
+  x?: number; y?: number; colors?: DiagramColors; appearance?: ConnectorStyle; fillStyle?: FillStyle;
+  roundness?: { type: 3 } | null; text?: NoteTextStyle;
+};
+const noteTextKeys = ['fontSize', 'fontFamily', 'textAlign', 'verticalAlign', 'opacity'] as const;
+
+function isNoteTextStyle(value: unknown): value is NoteTextStyle {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.entries(value).every(([key, value]) => {
+      if (key === 'fontSize') return typeof value === 'number' && Number.isFinite(value) && value > 0;
+      if (key === 'fontFamily') return [1, 2, 3, 5, 6, 7, 8].includes(value);
+      if (key === 'textAlign') return value === 'left' || value === 'center' || value === 'right';
+      if (key === 'verticalAlign') return value === 'top' || value === 'middle' || value === 'bottom';
+      return key === 'opacity' && typeof value === 'number' && value >= 0 && value <= 100;
+    });
+}
+
+function isFillStyle(value: unknown): value is FillStyle {
+  return value === 'solid' || value === 'hachure' || value === 'cross-hatch' || value === 'zigzag';
+}
+
+function readNoteFormatting(line?: string): NoteFormatting | undefined {
+  const payload = line?.trim().match(/^%% class-note (.+)$/)?.[1];
+  if (payload === undefined) return;
+  let value: unknown;
+  try { value = JSON.parse(payload); } catch { throw new Error('Invalid class note formatting JSON.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid class note formatting.');
+  const formatting: NoteFormatting = {};
+  for (const [key, property] of Object.entries(value)) {
+    if ((key === 'x' || key === 'y') && typeof property === 'number' && Number.isSafeInteger(property)) {
+      formatting[key] = property;
+    } else if (key === 'colors' && property && typeof property === 'object' && !Array.isArray(property)) {
+      const colors = readColors(Object.entries(property).map(([key, value]) => `${key}:${value}`).join(','));
+      if (!colors) throw new Error('Invalid class note colors.');
+      formatting.colors = colors;
+    } else if (key === 'appearance' && isConnectorStyle(property)) formatting.appearance = property;
+    else if (key === 'fillStyle' && isFillStyle(property)) formatting.fillStyle = property;
+    else if (key === 'roundness' && (property === null || (typeof property === 'object' && property.type === 3))) {
+      formatting.roundness = property === null ? null : { type: 3 };
+    } else if (key === 'text' && isNoteTextStyle(property)) formatting.text = property;
+    else throw new Error(`Invalid class note formatting property: ${key}.`);
+  }
+  return formatting;
+}
 
 const identifier = '[A-Za-z_][\\w-]*';
 const participantPattern = new RegExp(`^(participant|actor)\\s+(${identifier})(?:\\s+as\\s+(.+))?$`);
@@ -98,6 +148,10 @@ type Edit = {
   coordinate(id: string, axis: keyof Point): number;
   movement(id: string, axis: keyof Point): number;
   changedColor(id: string, property: keyof Colors): string | undefined;
+  connectorStyle(id: string, saved?: ConnectorStyle): ConnectorStyle | undefined;
+  fillStyle(id: string): FillStyle | undefined;
+  noteTextStyle(id: string, saved?: NoteTextStyle): NoteTextStyle | undefined;
+  roundness(id: string): NoteFormatting['roundness'];
   removed(id: string): boolean;
 };
 
@@ -130,6 +184,28 @@ function mapping(source: string, elements: Skeleton[], rewrite: (edit: Edit) => 
           if (!colorPattern.test(value)) throw new Error('Use a hex color or a named color.');
           return value;
         },
+        connectorStyle: (id, saved) => changedConnectorStyle(base.get(id), live.get(id), saved),
+        fillStyle(id) {
+          const value = live.get(id)?.fillStyle;
+          if (value === undefined || value === base.get(id)?.fillStyle) return;
+          if (!isFillStyle(value)) throw new Error('Unsupported fill style.');
+          return value;
+        },
+        noteTextStyle(id, saved) {
+          const before = base.get(`${id}:label`);
+          const after = live.get(`${id}:label`);
+          const changed = Object.fromEntries(noteTextKeys.flatMap((key) =>
+            after?.[key] !== undefined && after[key] !== before?.[key] ? [[key, after[key]]] : []));
+          if (!Object.keys(changed).length) return;
+          if (!isNoteTextStyle(changed)) throw new Error('Unsupported note text style.');
+          return { ...saved, ...changed };
+        },
+        roundness(id) {
+          const value = live.get(id)?.roundness;
+          if (value === undefined || value?.type === base.get(id)?.roundness?.type) return;
+          if (value !== null && value.type !== 3) throw new Error('Unsupported note corner style.');
+          return value === null ? null : { type: 3 };
+        },
         removed: (id) => !live.has(id),
       });
       if (updated !== source && !readMappedDiagram(updated)) throw new Error('This edit would leave the supported Mermaid syntax.');
@@ -143,6 +219,7 @@ function readSequence(source: string, lines: string[], header: number) {
   const rows: SequenceRow[] = [];
   const positions = new Map<string, Point & { line: number }>();
   const styles = new Map<string, { line: number; colors: DiagramColors }>();
+  const connectors = new Map<string, { line: number; style: ConnectorStyle }>();
   let attached: string | undefined;
   const implicit = (id: string) => {
     if (!people.has(id)) people.set(id, { id, line: -1, text: id, actor: false });
@@ -151,6 +228,11 @@ function readSequence(source: string, lines: string[], header: number) {
     const body = lines[line].trim();
     const layout = body.match(sequenceLayoutPattern);
     const style = body.match(sequenceStylePattern);
+    const connector = readConnectorStyle(body);
+    if (connector && attached === rows.at(-1)?.id && attached && !rows.at(-1)?.note && !connectors.has(attached)) {
+      connectors.set(attached, { line, style: connector });
+      continue;
+    }
     if (layout || style) {
       const target = (layout ?? style)![1];
       if (!attached || (target === 'row' ? !attached.startsWith('row:') : attached !== target.replace(' ', ':'))) return undefined;
@@ -232,10 +314,10 @@ function readSequence(source: string, lines: string[], header: number) {
       elements.push({ ...segment(id, { x: a, y }, { x: b, y: self ? y + 24 : y }, {
         heads: [null, 'triangle'], dashed: operator === '-->>',
         bend: self ? [[54, 0], [54, 24]] : undefined,
-      }), ...paint });
+      }), ...paint, ...connectors.get(id)?.style });
     }
   });
-  const formattingLines = new Set([...positions.values(), ...styles.values()].map(({ line }) => line));
+  const formattingLines = new Set([...positions.values(), ...styles.values(), ...connectors.values()].map(({ line }) => line));
   const diagram = mapping(source, elements, (edit) => {
     const output = [...lines];
     const personCenter = ({ id }: Participant) => peopleGeometry.get(id)!.center + edit.movement(`participant:${id}`, 'x');
@@ -249,7 +331,8 @@ function readSequence(source: string, lines: string[], header: number) {
       const layout = positions.get(id);
       const style = styles.get(id);
       const fill = edit.changedColor(id, 'backgroundColor');
-      const stroke = edit.changedColor(id, 'strokeColor');
+      const arrow = target === 'row' && rows.some((row) => row.id === id && !row.note);
+      const stroke = arrow ? undefined : edit.changedColor(id, 'strokeColor');
       const color = edit.changedColor(`${id}:label`, 'strokeColor');
       const comments = new Map<number, string>();
       const indent = statement.match(/^\s*/)?.[0] ?? '';
@@ -260,6 +343,12 @@ function readSequence(source: string, lines: string[], header: number) {
           ...(stroke !== undefined && { stroke }), ...(color !== undefined && { color }) };
         comments.set(style?.line ?? lines.length + 1, `${indent}%% sequence-style ${target} ${writeColors(colors)}`);
       } else if (style) comments.set(style.line, lines[style.line]);
+      if (arrow) {
+        const saved = connectors.get(id);
+        const updated = edit.connectorStyle(id, saved?.style);
+        if (updated) comments.set(saved?.line ?? lines.length + 2, writeConnectorStyle(statement, updated));
+        else if (saved) comments.set(saved.line, lines[saved.line]);
+      }
       return [statement, ...[...comments].sort(([a], [b]) => a - b).map(([, line]) => line)].join('\n');
     };
     participants.forEach(({ line }, index) => {
@@ -315,9 +404,10 @@ function replaceText(line: string, before: string, after: string) {
 function readClasses(source: string, lines: string[], header: number) {
   const classes = new Map<string, ClassBox>();
   const relations: Relationship[] = [];
-  const notes: (Statement & { target?: string; raw: string })[] = [];
+  const notes: (Statement & { target?: string; raw: string; formatting?: NoteFormatting })[] = [];
   const positions = new Map<string, Point & { line: number }>();
   const styles = new Map<string, { line: number; colors: DiagramColors }>();
+  const connectors = new Map<string, ConnectorStyle>();
   let block: ClassBox | undefined;
   const ensureClass = (id: string) => {
     if (!classes.has(id)) classes.set(id, { id, line: -1, text: id, members: [] });
@@ -350,7 +440,7 @@ function readClasses(source: string, lines: string[], header: number) {
       const [, target, raw] = note;
       const text = raw.replace(/<br\s*\/?>/gi, '\n').trim();
       if (!classNoteText(text)) return undefined;
-      notes.push({ id: `class-note:${line}`, line, target, raw, text });
+      notes.push({ id: `class-note:${line}`, line, target, raw, text, formatting: readNoteFormatting(lines[line + 1]) });
     } else if (style) {
       const [, id, properties] = style;
       if (styles.has(id)) return undefined;
@@ -367,7 +457,10 @@ function readClasses(source: string, lines: string[], header: number) {
       const [, from, left, operator, right, to, label = ''] = relation;
       ensureClass(from);
       ensureClass(to);
-      relations.push({ id: `relation:${line}`, line, from, to, operator, left, right, text: label });
+      const id = `relation:${line}`;
+      const connector = readConnectorStyle(lines[line + 1]);
+      if (connector) connectors.set(id, connector);
+      relations.push({ id, line, from, to, operator, left, right, text: label });
     } else if (member && memberText(member[2])) {
       ensureClass(member[1]).members.push({ id: `member:${line}`, line, text: member[2] });
     } else return undefined;
@@ -409,28 +502,37 @@ function readClasses(source: string, lines: string[], header: number) {
     const start = loop ? { x: a.x + a.width, y: a.y + 12 } : edge(a, 1);
     const end = loop ? { x: b.x + b.width, y: b.y + 32 } : edge(b, -1);
     const [head1, head2] = operator.split(/--|\.\./);
-    elements.unshift(segment(id, start, end, {
+    elements.unshift({ ...segment(id, start, end, {
       heads: [relationHead(head1), relationHead(head2)], dashed: operator.includes('..'),
       bend: loop ? [[36, 0], [36, 20]] : undefined,
       bindings: { start: { id: `class:${from}` }, end: { id: `class:${to}` } },
-    }));
+    }), ...connectors.get(id) });
     if (label) elements.push(text(`${id}:label`, label, (start.x + end.x - textWidth(label)) / 2 + (loop ? 48 : 0),
       (start.y + end.y) / 2 - 25, id));
     if (left) elements.push({ ...text(`${id}:left`, left, start.x + (end.x < start.x ? -textWidth(left) - 8 : 8), start.y + 8, id), locked: true });
     if (right) elements.push({ ...text(`${id}:right`, right, end.x + (end.x > start.x ? -textWidth(right) - 8 : 8), end.y + 8, id), locked: true });
   }
   let noteY = Math.max(0, ...[...geometry.values()].map(({ y, height }) => y + height)) + 48;
-  for (const { id, target, text: label } of notes) {
+  const noteGeometry = new Map<string, Point>();
+  for (const { id, target, text: label, formatting } of notes) {
     const rows = label.split('\n');
-    const width = Math.max(144, ...rows.map((row) => textWidth(row) + 24));
-    const height = 24 + rows.length * 22;
+    const fontSize = formatting?.text?.fontSize ?? 16;
+    const width = Math.max(144, ...rows.map((row) => Math.ceil(textWidth(row) * fontSize / 16) + 24));
+    const height = 24 + rows.length * Math.ceil(Math.max(22, fontSize * 1.25));
     const owner = target === undefined ? undefined : geometry.get(target);
     const center = owner ? owner.x + owner.width / 2 : width / 2;
-    const x = center - width / 2;
+    const x = formatting?.x ?? center - width / 2;
+    const y = formatting?.y ?? noteY;
+    noteGeometry.set(id, { x, y });
     if (owner) elements.unshift(segment(`${id}:connector`, { x: center, y: owner.y + owner.height + 4 },
-      { x: center, y: noteY - 4 }, { heads: [null, null], dashed: true, locked: true,
+      { x: x + width / 2, y: y - 4 }, { heads: [null, null], dashed: true, locked: true,
         bindings: { start: { id: `class:${target}` }, end: { id } } }));
-    elements.push({ ...box(id, x, noteY, width, height, 'dashed'), groupIds: [], label: sequenceLabel(id, label) });
+    const colors = formatting?.colors;
+    elements.push({ ...box(id, x, y, width, height, 'dashed'), groupIds: [], ...formatting?.appearance,
+      ...(formatting?.fillStyle && { fillStyle: formatting.fillStyle }),
+      ...(formatting?.roundness !== undefined && { roundness: formatting.roundness }),
+      ...(colors?.fill && { backgroundColor: colors.fill }), ...(colors?.stroke && { strokeColor: colors.stroke }),
+      label: { ...sequenceLabel(id, label), ...formatting?.text, ...(colors?.color && { strokeColor: colors.color }) } });
     noteY += height + 32;
   }
   const diagram = mapping(source, elements, (edit) => {
@@ -476,16 +578,58 @@ function readClasses(source: string, lines: string[], header: number) {
         output[line] = label ? replaceText(lines[line], text, label)
           : lines[line].slice(0, offset).replace(/[ \t]*:[ \t]*$/, '') + lines[line].slice(offset + text.length);
       }
-      for (const { id, line, text, raw } of notes) {
-        const label = edit.label(id, text, classNoteText);
-        if (label !== text) output[line] = replaceText(lines[line], raw, label.replaceAll('\n', '<br>'));
+      const saved = connectors.get(id);
+      const style = edit.connectorStyle(id, saved);
+      if (style) {
+        const comment = writeConnectorStyle(lines[line], style);
+        if (saved) output[line + 1] = comment;
+        else output[line] += `\n${comment}`;
+      }
+    }
+    for (const { id, line, text, raw, formatting } of notes) {
+      const label = edit.label(id, text, classNoteText);
+      if (label !== text) output[line] = replaceText(lines[line], raw, label.replaceAll('\n', '<br>'));
+      const dx = edit.movement(id, 'x');
+      const dy = edit.movement(id, 'y');
+      const fill = edit.changedColor(id, 'backgroundColor');
+      const stroke = edit.changedColor(id, 'strokeColor');
+      const color = edit.changedColor(`${id}:label`, 'strokeColor');
+      const appearance = edit.connectorStyle(id, formatting?.appearance);
+      const fillStyle = edit.fillStyle(id);
+      const textStyle = edit.noteTextStyle(id, formatting?.text);
+      const roundness = edit.roundness(id);
+      if (dx || dy || fill !== undefined || stroke !== undefined || color !== undefined || appearance || fillStyle || textStyle || roundness !== undefined) {
+        const { x, y } = noteGeometry.get(id)!;
+        const next: NoteFormatting = { ...formatting, ...(dx || dy ? { x: x + dx, y: y + dy } : {}),
+          colors: { ...formatting?.colors, ...(fill !== undefined && { fill }),
+            ...(stroke !== undefined && { stroke }), ...(color !== undefined && { color }) } };
+        if (!Object.keys(next.colors!).length) delete next.colors;
+        if (appearance) {
+          delete appearance.strokeColor;
+          if (Object.keys(appearance).length) next.appearance = appearance;
+        }
+        if (fillStyle) next.fillStyle = fillStyle;
+        if (textStyle) next.text = textStyle;
+        if (roundness !== undefined) next.roundness = roundness;
+        const comment = `${lines[line].match(/^[ \t]*/)?.[0] ?? ''}%% class-note ${JSON.stringify(next)}`;
+        if (formatting) output[line + 1] = comment;
+        else output[line] += `\n${comment}`;
       }
     }
     if (added.length) output.splice(output.at(-1) === '' ? output.length - 1 : output.length, 0, ...added);
     return output.join('\n');
   });
   const formattingLines = new Set([...positions.values(), ...styles.values()].map(({ line }) => line));
+  for (const { id, line } of relations) if (connectors.has(id)) formattingLines.add(line + 1);
+  for (const { line, formatting } of notes) if (formatting) formattingLines.add(line + 1);
   return { ...diagram, resetFormatting: () => lines.filter((_, line) => !formattingLines.has(line)).join('\n') };
+}
+
+/** Style-only edits preserve statement order even if comment insertion changes scene IDs. */
+export function mappedStyleOnly(before: string, after: string) {
+  const withoutStyles = (source: string) => source.split('\n').filter((line) =>
+    !/^\s*(?:%% (?:graph-transition-style|graph-native-style|graph-style|sequence-style|class-note)\s|style\s)/.test(line)).join('\n');
+  return before !== after && withoutStyles(before) === withoutStyles(after);
 }
 
 /** Source-owned mapping for whitelisted sequence and class diagrams. Unknown syntax is read-only as a whole. */

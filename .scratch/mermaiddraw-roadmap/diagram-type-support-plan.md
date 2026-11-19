@@ -90,6 +90,32 @@ The [sequence mapping fixture](../../tests/diagrams/sequence/sequence-mapping.md
 
 The [class mapping fixture](../../tests/diagrams/class/class-mapping.md) covers class labels, members, relationship labels, and repeated class moves. Relationship lines, labels, and multiplicities follow the boxes. Positions use `%% class-layout` comments and class colors use native Mermaid `style` statements. Changing the class or relationship structure is source-only; unsupported constructs such as namespaces keep the block read-only.
 
+The [class note fixture](../../tests/diagrams/class/class-notes.md) covers standalone notes, multiple notes on one class, and identical note text without any class relationships. Note position, colors, stroke/fill appearance, rounded corners, and font/alignment settings use an adjacent `%% class-note` JSON comment. Reset keeps edited text and class attachments.
+
+## Verified editing coverage
+
+Verification is operation-specific, not diagram-wide. **Browser** means real UI gestures and source assertions; **Mapping** means source/scene round-trip tests, not mouse interaction. Neither means every Mermaid construct or Excalidraw control works.
+
+| Object / operation | Automated evidence | Remaining limits |
+| --- | --- | --- |
+| Flowchart source/scene styling, connector edits, metadata ownership/reset | Mapping: [relationships](../../tests/diagrams/flow_chart/relationships.test.ts) | Not an exhaustive browser control matrix |
+| Local Markdown import, edit, download; offline standalone use | Browser: [standalone](../../tests/browser/standalone.smoke.ts) | Does not certify every diagram's controls |
+| Sequence aliases, message/note text, row reorder | Browser: [sequence](../../tests/browser/sequence-mapping.smoke.ts); Mapping | Only supported syntax/operators |
+| Sequence participant move/color/reopen/reset | Browser: [sequence](../../tests/browser/sequence-mapping.smoke.ts) | Other note/participant style controls not browser-certified |
+| Sequence note position/color/reorder; message stroke appearance | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Full browser lifecycle still a gap |
+| Class labels/members/relationship labels | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Browser text coverage is not complete |
+| Class repeated moves, live relationships, class colors/reset | Browser: [class](../../tests/browser/class-mapping.smoke.ts) | Class box typography/resize are not certified |
+| Class relationship stroke appearance/reopen/reset | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Browser coverage remains narrower than mapping coverage |
+| Each standalone/attached/duplicate class note: two drags, text edits, consecutive styling, download/reopen/reset | Browser: [class](../../tests/browser/class-mapping.smoke.ts); Mapping | Note creation/deletion, resizing, rotation, layers are unsupported |
+| Class note fill/stroke/text colors, fill pattern, stroke width/pattern, roughness, opacity, corners, font family/size, text alignment | Browser: [class](../../tests/browser/class-mapping.smoke.ts); Mapping | Tests exercise representative choices, not every combination; separate text color is mapping-tested |
+| Class note ownership after source line changes, independent duplicate notes, invalid metadata | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Note attachment connectors are derived, not independently editable |
+| State and entity relationship node creation/reopening | Browser: [graphs](../../tests/browser/graph-mapping.smoke.ts) | Browser tests do not yet cover every existing node, note, or connector edit |
+| State scoped transitions, aliases, layout, arrow styles/reset/deletion | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Composite/region manipulation and complete browser action matrix remain gaps |
+| Entity relationship attributes, labels, cardinalities, additions/deletions, formatting/reset | Mapping: [typed mappings](../../tests/markdown/typed-mapping.test.ts) | Full browser edit/style lifecycle remains a gap |
+| VS Code text sync and echo prevention | Browser: [webview](../../tests/browser/vscode-webview.smoke.ts); [sync](../../tests/vscode/sync.test.ts) | Shared mapping does not replace diagram-specific browser coverage |
+
+Required evidence for extending a support claim: the relevant element must survive repeated edits, serialization, reopening, and reset; verify neighboring elements and unrelated source remain intact. A render-only or creation-only smoke test is insufficient. No claim of complete editing support should be based only on the aggregate test count.
+
 ## State and entity relationship diagrams
 
 The default state layout follows transitions from each region's start marker, places its end marker after the states, and routes return transitions and shortcuts beside the main path. Saved positions still override the default layout.

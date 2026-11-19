@@ -26,6 +26,12 @@ Open a standalone Mermaid file (`.mermaid`) or a Markdown document (`.md`, `.mar
 | State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Supports composite states, concurrent regions, notes, and start/end markers. Create or reorganize regions in source. |
 | Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Add attributes by placing text inside an entity. Supports nested subgraphs; create subgraphs in source. |
 
+For supported class, sequence, state, and entity relationship connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments. These visual overrides do not change relationship or message semantics.
+
+Class notes support repeated moves, fill/stroke/text colors, fill pattern, stroke width/pattern, roughness, opacity, rounded corners, and font/alignment controls. Note formatting is stored in an adjacent `%% class-note` comment; reset preserves note text and class attachment. Resizing, rotation, note creation/deletion, and layer changes are not supported canvas operations.
+
+See the [editing test matrix](.scratch/mermaiddraw-roadmap/diagram-type-support-plan.md#verified-editing-coverage) for browser-tested operations, mapping-only checks, and remaining gaps. A visible Excalidraw control is not evidence of Mermaid round-trip support.
+
 Other diagram types and blocks with unsupported syntax are shown as read-only source and preserved.
 
 ## Features

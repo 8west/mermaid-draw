@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, newElementWith } from '@excalidraw/excalidraw';
-import type { ExcalidrawElement, ExcalidrawLinearElement } from '@excalidraw/excalidraw/element/types';
+import type { ExcalidrawElement, ExcalidrawLinearElement, ExcalidrawTextElement } from '@excalidraw/excalidraw/element/types';
 import type { AppState, BinaryFiles, ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types';
 import '@excalidraw/excalidraw/index.css';
 import { parseMermaidToExcalidraw } from '@excalidraw/mermaid-to-excalidraw';
@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { readCanvasExtras, remapCanvasReferences, writeCanvasExtras } from '@mermaid-draw/core/canvas-extras';
-import { readMappedDiagram } from '@mermaid-draw/core/mapped-diagram';
+import { mappedStyleOnly, readMappedDiagram } from '@mermaid-draw/core/mapped-diagram';
 import {
   ARCHITECT_ROUGHNESS, appearanceOverrides, chooseNodeId, getArrowLayout, getRelationshipSyntax, isSimpleLabel, normalizeArrowPoints, readFlowchart, removeNodes,
   removeRelationship, renameNewNode, restorePositions, writeArrow, writeLabel, writeNodeStyle, writePosition, writeRelationship,
@@ -57,7 +57,8 @@ let editor: Root | undefined;
 let api: ExcalidrawImperativeAPI | undefined;
 let mapped: ReturnType<typeof readMappedDiagram>;
 let mappedBaseline: readonly (Pick<ExcalidrawElement, 'id' | 'x' | 'y' | 'version' | 'versionNonce' | 'strokeColor' | 'backgroundColor' |
-  'strokeWidth' | 'strokeStyle' | 'opacity' | 'roughness'>
+  'strokeWidth' | 'strokeStyle' | 'opacity' | 'roughness' | 'fillStyle' | 'roundness'>
+  & Partial<Pick<ExcalidrawTextElement, 'fontSize' | 'fontFamily' | 'textAlign' | 'verticalAlign'>>
   & Partial<Pick<ExcalidrawLinearElement, 'startBinding' | 'endBinding'>>)[] = [];
 let relationshipAnnotations = new Map<string, { arrowId: string; ratio: number; x: number; y: number }>();
 
@@ -67,7 +68,7 @@ function arrowAnchor(arrow: Pick<ExcalidrawLinearElement, 'x' | 'y' | 'points'>,
   return { x: arrow.x + startX + (endX - startX) * ratio, y: arrow.y + startY + (endY - startY) * ratio };
 }
 
-function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: ExcalidrawImperativeAPI) {
+function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: ExcalidrawImperativeAPI, keepSelection = false) {
   const scene = convertToExcalidrawElements(diagram.elements, { regenerateIds: false });
   for (const [index, element] of scene.entries()) {
     if (element.type !== 'arrow' || !element.points.length) continue;
@@ -78,11 +79,24 @@ function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: Excal
       ([x, y]) => [x + element.x, y + element.y],
     )) };
   }
+  const current = keepSelection ? mounted?.getAppState() : undefined;
+  // Style comments can shift line-derived IDs, but not projection order.
+  const selectedIds = current && scene.length === mappedBaseline.length
+    ? Object.fromEntries(scene.flatMap(({ id }, index) => current.selectedElementIds[mappedBaseline[index].id] ? [[id, true as const]] : []))
+    : {};
+  const selectedGroupIds = current
+    ? Object.fromEntries(scene.filter(({ id }) => selectedIds[id]).flatMap(({ groupIds }) =>
+      groupIds.filter((id) => current.selectedGroupIds[id]).map((id) => [id, true as const])))
+    : {};
   mapped = diagram;
   // Excalidraw can mutate the elements passed to updateScene during the next gesture.
   mappedBaseline = scene.map((element) => {
-    const { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness } = element;
-    return { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness, ...(element.type === 'arrow' && {
+    const { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness, fillStyle } = element;
+    return { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness, fillStyle,
+      roundness: element.roundness && { ...element.roundness },
+      ...(element.type === 'text' && { fontSize: element.fontSize, fontFamily: element.fontFamily,
+        textAlign: element.textAlign, verticalAlign: element.verticalAlign }),
+      ...(element.type === 'arrow' && {
       startBinding: element.startBinding && { ...element.startBinding },
       endBinding: element.endBinding && { ...element.endBinding },
     }) };
@@ -101,7 +115,7 @@ function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: Excal
   if (mounted) {
     // Line-slot IDs belong to this projection; previous canvas undo entries cannot address them safely.
     mounted.history.clear();
-    mounted.updateScene({ elements: scene, appState: { selectedElementIds: {}, selectedGroupIds: {} },
+    mounted.updateScene({ elements: scene, appState: { selectedElementIds: selectedIds, selectedGroupIds },
       captureUpdate: CaptureUpdateAction.NEVER });
   } else if (canvasHost.value) {
     editor = createRoot(canvasHost.value);
@@ -287,7 +301,7 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
     }
     const next = updated === applied.value ? previous : readMappedDiagram(updated);
     if (!next) throw new Error('Mapped canvas produced unsupported Mermaid.');
-    installMappedScene(next, api);
+    installMappedScene(next, api, next === previous || mappedStyleOnly(applied.value, updated));
     if (updated !== applied.value) {
       applied.value = updated;
       status.value = 'Canvas change written to Mermaid.';

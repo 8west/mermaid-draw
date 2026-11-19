@@ -1,5 +1,6 @@
 import type { convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import type { Arrowhead } from '@excalidraw/excalidraw/element/types';
+import { changedConnectorStyle, readConnectorStyle, writeConnectorStyle, type ConnectorStyle } from './connectorStyle.ts';
 
 type Skeleton = NonNullable<Parameters<typeof convertToExcalidrawElements>[0]>[number];
 type Point = { x: number; y: number };
@@ -28,10 +29,6 @@ type Edge = {
   write?: (label: string, from: string, to: string, heads: Edge['heads'], dashed: boolean) => string;
 };
 type Paint = { fill?: string; stroke?: string; color?: string };
-type TransitionStyle = {
-  strokeColor?: string; strokeWidth?: number; strokeStyle?: 'solid' | 'dashed' | 'dotted';
-  opacity?: number; roughness?: number;
-};
 type Graph = { root: Scope; nodes: Map<string, Node>; edges: Edge[]; nativePaint: Map<string, Paint> };
 
 const shape = { roughness: 0, strokeWidth: 2 } as const;
@@ -384,35 +381,8 @@ function stateDetour(edge: Edge, boxes: Map<string, Bounds>, parallel: number): 
   return [point(start, extent(a) + side * 4), point(start, lane), point(end, lane), point(end, extent(b) + side * 4)];
 }
 
-const transitionStyleKeys = ['strokeColor', 'strokeWidth', 'strokeStyle', 'opacity', 'roughness'] as const;
-
-function transitionStyleProperty(key: keyof TransitionStyle, value: string | number): TransitionStyle | undefined {
-  if (key === 'strokeColor') return typeof value === 'string' && sourceColor.test(value) ? { strokeColor: value } : undefined;
-  if (key === 'strokeStyle') return value === 'solid' || value === 'dashed' || value === 'dotted' ? { strokeStyle: value } : undefined;
-  const number = typeof value === 'number' ? value : /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN;
-  const minimum = key === 'strokeWidth' ? 1 : 0;
-  const maximum = key === 'roughness' ? 2 : 100;
-  if (!Number.isFinite(number) || number < minimum || number > maximum) return;
-  return { [key]: number };
-}
-
-function readTransitionStyle(line: string | undefined) {
-  const match = line?.trim().match(/^%% graph-transition-style (.+)$/);
-  if (!match) return;
-  const style: TransitionStyle = {};
-  for (const entry of match[1].split(',')) {
-    const [key, value, extra] = entry.split(':');
-    const property = transitionStyleKeys.find((name) => name === key);
-    if (!property || !value || extra !== undefined) return;
-    const parsed = transitionStyleProperty(property, value);
-    if (!parsed) return;
-    Object.assign(style, parsed);
-  }
-  return style;
-}
-
 function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map<string, Paint>, state: boolean,
-  transitionStyles: Map<string, TransitionStyle>) {
+  transitionStyles: Map<string, ConnectorStyle>) {
   const boxes = new Map<string, Bounds>();
   const elements: Skeleton[] = [];
   const foreground: Skeleton[] = [];
@@ -501,11 +471,11 @@ export function readGraphDiagram(source: string, lines: string[], header: number
   const palette = new Map<string, Paint>();
   const formatting = new Map<string, number>();
   const nativeStyles = new Map<string, number>();
-  const transitionStyles = new Map<string, TransitionStyle>();
+  const transitionStyles = new Map<string, ConnectorStyle>();
   // Keep the style next to its transition, not keyed to a source line number.
-  if (state) for (const edge of graph.edges) {
+  for (const edge of graph.edges) {
     if (!edge.write) continue;
-    const style = readTransitionStyle(lines[edge.line + 1]);
+    const style = readConnectorStyle(lines[edge.line + 1]);
     if (style) transitionStyles.set(edge.id, style);
   }
   for (let line = header + 1; line < lines.length; line++) {
@@ -646,24 +616,12 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         if (!edge.write || !edge.label) continue;
         const current = live.get(edge.id);
         const previous = base.get(edge.id);
-        if (state && current && previous) {
-          const saved = transitionStyles.get(edge.id);
-          const style = { ...saved };
-          let changed = false;
-          for (const key of transitionStyleKeys) {
-            const value = current[key];
-            if (value === undefined || value === previous[key]) continue;
-            const property = transitionStyleProperty(key, value);
-            if (!property) throw new Error('Unsupported transition styling value.');
-            Object.assign(style, property);
-            changed = true;
-          }
-          if (changed) {
-            const properties = Object.entries(style).map(([key, value]) => `${key}:${value}`).join(',');
-            const comment = `${lineIndent(lines[edge.line])}%% graph-transition-style ${properties}`;
-            if (saved) output[edge.line + 1] = comment;
-            else insert(edge.line + 1, comment);
-          }
+        const saved = transitionStyles.get(edge.id);
+        const style = changedConnectorStyle(previous, current, saved);
+        if (style) {
+          const comment = writeConnectorStyle(lines[edge.line], style);
+          if (saved) output[edge.line + 1] = comment;
+          else insert(edge.line + 1, comment);
         }
         const attached = current?.boundElements?.find(({ type }) => type === 'text')?.id;
         const value = updateLabel(edge.label, attached ?? `${edge.id}:label`, '');
@@ -678,10 +636,10 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         const from = endpoint(current?.startBinding, previous?.startBinding, edge.from);
         const to = endpoint(current?.endBinding, previous?.endBinding, edge.to);
         const heads: Edge['heads'] = state ? edge.heads : [current?.startArrowhead ?? edge.heads[0], current?.endArrowhead ?? edge.heads[1]];
-        const dashed = state || current?.strokeStyle === undefined ? Boolean(edge.dashed) : current.strokeStyle === 'dashed';
+        const dashed = Boolean(edge.dashed);
         const label = value ?? (hasDeletedLabel ? (state ? '' : 'relates to') : edge.label.text);
         if (label !== edge.label.text || from !== edge.from || to !== edge.to ||
-          heads[0] !== edge.heads[0] || heads[1] !== edge.heads[1] || dashed !== Boolean(edge.dashed)) {
+          heads[0] !== edge.heads[0] || heads[1] !== edge.heads[1]) {
           output[edge.line] = edge.write(valid(label, !state),
             from === edge.from ? edge.references![0] : from.reference,
             to === edge.to ? edge.references![1] : to.reference, heads, dashed);

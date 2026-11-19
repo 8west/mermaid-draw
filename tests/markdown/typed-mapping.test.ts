@@ -110,6 +110,32 @@ test('reopening a styled class applies its saved fill, outline, and text color',
   assert.equal(scene.find((element) => element.type === 'text' && element.text === '+submit()')?.strokeColor, '#1971c2');
 });
 
+test('connector appearance reopens without changing class, sequence, or entity relationship operators', () => {
+  for (const [source, statement] of [
+    ['classDiagram\nAnimal <|-- Duck\nAnimal <|-- Fish\n', 'Animal <|-- Duck'],
+    ['sequenceDiagram\nA-->>B: Ping\nA-->>B: Pong\n', 'A-->>B: Ping'],
+    ['erDiagram\nA ||..o{ B : owns\nA ||--o{ C : owns\n', 'A ||..o{ B : owns'],
+  ]) {
+    const mapping = readMappedDiagram(source)!;
+    const before = mapping.elements.map((element) => ({ ...element, id: element.id! }));
+    const arrows = before.filter(({ type }) => type === 'arrow');
+    if (source.startsWith('classDiagram')) arrows.reverse();
+    const styled = mapping.update(before, before.map((element) => element.id === arrows[0].id
+      ? { ...element, strokeColor: '#e03131', strokeWidth: 4, strokeStyle: 'dotted', opacity: 60, roughness: 2 }
+      : element));
+    assert.ok(styled.startsWith(source.slice(0, source.indexOf(statement)) + `${statement}\n%% `), styled);
+    const reopened = readMappedDiagram(styled)!.elements.filter(({ type }) => type === 'arrow');
+    if (source.startsWith('classDiagram')) reopened.reverse();
+    const [first, second] = reopened;
+    assert.deepEqual([first.strokeColor, first.strokeWidth, first.strokeStyle, first.opacity, first.roughness],
+      ['#e03131', 4, 'dotted', 60, 2]);
+    assert.equal(first.startArrowhead, arrows[0].startArrowhead);
+    assert.equal(first.endArrowhead, arrows[0].endArrowhead);
+    assert.equal(second.strokeColor, arrows[1].strokeColor);
+    assert.equal(resetDiagramFormatting(styled, source), source);
+  }
+});
+
 test('untouched scenes do not rewrite source and an invalid canvas label is rejected', () => {
   for (const name of ['sequence', 'class']) {
     const { diagram, mapping, scene } = fixture(name);
@@ -136,6 +162,85 @@ test('class notes import as editable text and preserve their class attachment an
   assert.equal(mapping.update(scene, scene), source);
   assert.equal(mapping.update(scene, scene.map((element) => element === attached
     ? { ...element, originalText: 'Revised\nSecond' } : element)), source.replace('First<br/>Second', 'Revised<br>Second'));
+});
+
+test('standalone and attached class notes retain repeated moves and colors without needing a relationship', () => {
+  for (const statement of ['note "First<br>Second"', 'note for Book "First<br>Second"']) {
+    const source = `classDiagram\nclass Book\n${statement}\n${statement}\n%% keep this comment\n`;
+    let mapping = readMappedDiagram(source)!;
+    const scene = () => mapping.elements.flatMap((element) => {
+      const shape = { ...element, id: element.id! };
+      return 'label' in element && element.label?.id
+        ? [shape, { id: element.label.id, x: element.x, y: element.y, originalText: element.label.text,
+          strokeColor: element.label.strokeColor }] : [shape];
+    });
+    let before = scene();
+    let note = mapping.elements.find((element) => element.type === 'rectangle' && element.id?.startsWith('class-note:'))!;
+    const origin = { x: note.x, y: note.y };
+    let updated = mapping.update(before, before.map((element) => element.id === note.id
+      ? { ...element, x: element.x + 60, y: element.y + 40, backgroundColor: '#ffc9c9', strokeColor: '#e03131' }
+      : element.id === `${note.id}:label` ? { ...element, originalText: 'Revised\nSecond', strokeColor: '#1971c2' } : element));
+    mapping = readMappedDiagram(updated)!;
+    note = mapping.elements.find((element) => element.type === 'rectangle' && element.id?.startsWith('class-note:'))!;
+    assert.deepEqual([note.x, note.y, note.backgroundColor, note.strokeColor],
+      [origin.x + 60, origin.y + 40, '#ffc9c9', '#e03131']);
+    assert.ok(note.type === 'rectangle');
+    assert.equal(note.label?.strokeColor, '#1971c2');
+    before = scene();
+    updated = mapping.update(before, before.map((element) => element.id === note.id
+      ? { ...element, x: element.x - 20, y: element.y + 15 } : element));
+    mapping = readMappedDiagram(updated)!;
+    const notes = mapping.elements.filter((element) => element.type === 'rectangle' && element.id?.startsWith('class-note:'));
+    assert.deepEqual([notes[0].x, notes[0].y], [origin.x + 40, origin.y + 55]);
+    assert.notEqual(notes[1].backgroundColor, '#ffc9c9', 'identical notes keep independent formatting');
+    assert.equal(resetDiagramFormatting(updated, source), source.replace('First<br>Second', 'Revised<br>Second'));
+  }
+});
+
+test('class note stroke and fill styles survive text edits, shifted lines, and reset', () => {
+  const source = 'classDiagram\nclass Book\nnote for Book "Details"\n';
+  const mapping = readMappedDiagram(source)!;
+  const before = mapping.elements.map((element) => ({ ...element, id: element.id! }));
+  const note = before.find((element) => element.type === 'rectangle' && element.id.startsWith('class-note:'))!;
+  const updated = mapping.update(before, before.map((element) => element === note
+    ? { ...element, strokeWidth: 4, strokeStyle: 'dotted', opacity: 60, roughness: 2, fillStyle: 'cross-hatch' } : element));
+  const shifted = updated.replace('class Book', '%% author comment\nclass Book').replace('"Details"', '"Edited<br>Details"');
+  const reopened = readMappedDiagram(shifted)!.elements.find((element) => element.type === 'rectangle' && element.id?.startsWith('class-note:'))!;
+  assert.deepEqual([reopened.strokeWidth, reopened.strokeStyle, reopened.opacity, reopened.roughness, reopened.fillStyle],
+    [4, 'dotted', 60, 2, 'cross-hatch']);
+  assert.equal(resetDiagramFormatting(shifted, source),
+    source.replace('class Book', '%% author comment\nclass Book').replace('"Details"', '"Edited<br>Details"'));
+});
+
+test('class note typography, rounded corners, and text opacity survive reopening', () => {
+  const source = 'classDiagram\nnote "Details"\n';
+  const mapping = readMappedDiagram(source)!;
+  const before = [
+    { id: 'class-note:1', x: 0, y: 48, roundness: null },
+    { id: 'class-note:1:label', x: 0, y: 48, originalText: 'Details', fontSize: 16, fontFamily: 3,
+      textAlign: 'center', verticalAlign: 'middle', opacity: 100 },
+  ];
+  const after = [
+    { ...before[0], roundness: { type: 3 as const }, opacity: 60 },
+    { ...before[1], fontSize: 28, fontFamily: 2, textAlign: 'left', verticalAlign: 'top', opacity: 60 },
+  ];
+  const updated = mapping.update(before, after);
+  const note = readMappedDiagram(updated)!.elements.find((element) => element.type === 'rectangle')!;
+  assert.deepEqual(note.roundness, { type: 3 });
+  assert.equal(note.opacity, 60);
+  assert.ok(note.type === 'rectangle');
+  assert.deepEqual([note.label?.fontSize, note.label?.fontFamily, note.label?.textAlign, note.label?.verticalAlign, note.label?.opacity],
+    [28, 2, 'left', 'top', 60]);
+  assert.equal(resetDiagramFormatting(updated, source), source);
+});
+
+test('invalid owned note metadata is rejected and unrelated comments are preserved', () => {
+  for (const payload of ['{', '{"x":"bad"}', '{"appearance":{"opacity":101}}', '{"text":{"fontSize":-1}}']) {
+    assert.throws(() => readMappedDiagram(`classDiagram\nnote "Details"\n%% class-note ${payload}\n`), /class note formatting/);
+  }
+  const source = 'classDiagram\n%% class-note {"x":25}\nnote "Details"\n%% author comment\n%% class-note {"x":40}\n';
+  const mapping = readMappedDiagram(source)!;
+  assert.equal(mapping.resetFormatting!(), source, 'only immediately adjacent owned formatting can be reset');
 });
 
 test('unknown class syntax is read-only and its source is preserved', () => {
