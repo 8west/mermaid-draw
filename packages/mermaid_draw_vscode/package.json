@@ -1,12 +1,17 @@
 {
   "name": "mermaid-draw-vscode",
   "displayName": "MermaidDraw",
-  "description": "Edit Mermaid flowcharts in Markdown and Mermaid files on an Excalidraw canvas.",
+  "description": "Edit Mermaid diagrams in Markdown and Mermaid files on an Excalidraw canvas.",
   "icon": "media/icon.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mermaid-draw",
   "private": true,
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/8west/mermaid-draw.git",
+    "directory": "packages/mermaid_draw_vscode"
+  },
   "type": "module",
   "engines": {
     "vscode": "^1.100.0"
@@ -84,7 +89,7 @@
   },
   "scripts": {
     "build": "vue-tsc --noEmit && vite build && vite build -c vite.extension.config.ts",
-    "package": "pnpm build && vsce package --no-dependencies --skip-license --allow-missing-repository -o dist/mermaid-draw.vsix"
+    "package": "pnpm build && vsce package --no-dependencies --skip-license -o dist/mermaid-draw.vsix"
   },
   "dependencies": {
     "@mermaid-draw/core": "workspace:*",
