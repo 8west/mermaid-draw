@@ -8,8 +8,8 @@ import { chromium, type Page } from 'playwright';
 import { webviewHtml } from '../../packages/mermaid_draw_vscode/src/extension/webviewHtml.ts';
 
 const root = fileURLToPath(new URL('../../packages/mermaid_draw_vscode/dist/webview/', import.meta.url));
-const markdown = await readFile(new URL('../markdown/three-flowcharts.md', import.meta.url), 'utf8');
-const standalone = await readFile(new URL('../flow_chart/flow_chart1.mermaid', import.meta.url), 'utf8');
+const markdown = await readFile(new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url), 'utf8');
+const standalone = await readFile(new URL('../diagrams/flow_chart/flow_chart1.mermaid', import.meta.url), 'utf8');
 const types: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2' };
 type Message = { type: string; base?: string; text?: string };
 

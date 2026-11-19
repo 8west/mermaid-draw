@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue';
-import { openDocument } from '@mermaid-draw/core/document';
-import { resetCanvasFormatting } from '@mermaid-draw/core/flowchart';
+import { openDocument, resetDiagramFormatting } from '@mermaid-draw/core/document';
 import CanvasEditor from 'mermaid-draw-web/canvas';
 import type { HostMessage, WebviewMessage } from '../shared/protocol.ts';
 import { matchDiagrams } from './matchDiagrams.ts';
@@ -30,11 +29,11 @@ const activeSlot = computed(() => slots.value.find(({ key }) => key === selected
 const layoutSignal = computed(() => `${loadError.value}:${tabbed.value}:${diagnosticsOpen.value}`);
 const canResetStyles = computed(() => {
   const slot = activeSlot.value;
-  if (!slot?.diagram.editable || loadError.value) return false;
+  if (!slot?.diagram.resettable || loadError.value) return false;
   const state = states.get(slot.key);
   if (state?.busy || state?.error) return false;
   const source = state?.source ?? slot.diagram.source;
-  return resetCanvasFormatting(source, slot.diagram.source) !== source;
+  return resetDiagramFormatting(source, slot.diagram.source) !== source;
 });
 const status = computed(() => {
   const state = states.get(selected.value);
@@ -98,7 +97,7 @@ function resetStyles() {
     [diagram.id, states.get(key)?.source ?? diagram.source],
   ));
   const source = edits.get(slot.diagram.id) ?? slot.diagram.source;
-  edits.set(slot.diagram.id, resetCanvasFormatting(source, slot.diagram.source));
+  edits.set(slot.diagram.id, resetDiagramFormatting(source, slot.diagram.source));
   const text = current.value.save(edits);
   if (text !== synced) vscode.postMessage({ type: 'edit', base: synced, text });
 }
@@ -149,7 +148,7 @@ vscode.postMessage({ type: 'ready' });
         >{{ diagram.title }}</button>
       </div>
       <div class="workspace-controls">
-        <button v-if="activeSlot?.diagram.editable" type="button" :disabled="!canResetStyles" @click="resetStyles">
+        <button v-if="activeSlot?.diagram.resettable" type="button" :disabled="!canResetStyles" @click="resetStyles">
           Reset styles
         </button>
         <button type="button" aria-label="Diagnostics" title="Diagnostics" :aria-expanded="diagnosticsOpen"
@@ -178,7 +177,7 @@ vscode.postMessage({ type: 'ready' });
           :layout-signal="layoutSignal" :theme="theme" @state="updateCanvas(key, $event)"
         />
         <template v-else>
-          <p class="empty-note">Read only. Only flowcharts can be edited on the canvas.</p>
+          <p class="empty-note">Read only. This diagram type or syntax cannot be edited on the canvas.</p>
           <pre>{{ diagram.source }}</pre>
         </template>
       </section>

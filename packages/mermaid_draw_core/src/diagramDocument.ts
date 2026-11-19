@@ -1,12 +1,26 @@
 import { parse, postprocess, preprocess } from 'micromark';
+import { diagramHeader, readMappedDiagram } from '@mermaid-draw/core/mapped-diagram';
+import { resetCanvasFormatting } from '@mermaid-draw/core/flowchart';
 
-type Diagram = { id: number; title: string; source: string; editable: boolean };
+type Diagram = { id: number; title: string; source: string; editable: boolean; resettable: boolean };
 type Block = Diagram & { start: number; end: number; prefix: string; eol: string; leadingBreak: boolean; trailingBreak: boolean };
 
 function isFlowchart(source: string): boolean {
-  const body = source.replace(/^---[ \t]*\n[\s\S]*?\n---[ \t]*\n/, '');
-  const header = body.split('\n').find((line) => line.trim() && !line.trimStart().startsWith('%%'));
-  return !header || /^\s*(?:flowchart|graph)(?:\s|$)/i.test(header);
+  const lines = source.split('\n');
+  const header = diagramHeader(lines);
+  return header < 0 || /^\s*(?:flowchart|graph)(?:\s|$)/i.test(lines[header]);
+}
+
+function capabilities(source: string) {
+  const flowchart = isFlowchart(source);
+  const mapped = flowchart ? undefined : readMappedDiagram(source);
+  return { editable: flowchart || Boolean(mapped), resettable: flowchart || Boolean(mapped?.resetFormatting) };
+}
+
+/** Reset canvas formatting for supported types without reverting semantic edits. */
+export function resetDiagramFormatting(source: string, originalSource: string): string {
+  if (isFlowchart(source)) return resetCanvasFormatting(source, originalSource);
+  return readMappedDiagram(source)?.resetFormatting?.() ?? source;
 }
 
 function markdownBlocks(text: string): Block[] {
@@ -58,7 +72,7 @@ function markdownBlocks(text: string): Block[] {
         const adjacent = heading && /^[ \t\r\n]*$/.test(text.slice(heading.end, lineStart(fence.start)));
         const idTitle = adjacent && heading ? heading.title : `Diagram ${id}`;
         blocks.push({
-          id, title: idTitle, source, editable: isFlowchart(source), start: bodyStart, end: bodyEnd,
+          id, title: idTitle, source, ...capabilities(source), start: bodyStart, end: bodyEnd,
           prefix: fence.prefix ?? (/^[ \t>]*$/.test(text.slice(lineStart(fence.start), fence.start))
             ? text.slice(lineStart(fence.start), fence.start) : ''),
           eol: openingEol ?? '\n', leadingBreak: !openingEol,
@@ -79,7 +93,7 @@ export function openDocument(name: string | null, original: string) {
   if (name !== null && !markdown && !/\.mermaid$/i.test(name)) throw new Error('Choose a Markdown (.md, .markdown) or Mermaid (.mermaid) file.');
   const source = markdown ? '' : text.replace(/\r\n?|\n/g, '\n');
   const blocks: Block[] = markdown ? markdownBlocks(text) : [{
-    id: 1, title: 'Diagram 1', source, editable: isFlowchart(source), start: 0, end: text.length,
+    id: 1, title: 'Diagram 1', source, ...capabilities(source), start: 0, end: text.length,
     prefix: '', eol: text.match(/\r\n|\n|\r/)?.[0] ?? '\n', leadingBreak: false, trailingBreak: false,
   }];
   const diagrams: readonly Diagram[] = blocks;

@@ -5,6 +5,7 @@
   "exports": {
     "./flowchart": "./src/flowchart.ts",
     "./document": "./src/diagramDocument.ts",
+    "./mapped-diagram": "./src/mappedDiagram.ts",
     "./canvas-extras": "./src/canvasExtras.ts"
   },
   "dependencies": {

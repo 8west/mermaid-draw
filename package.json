@@ -11,7 +11,7 @@
   "author": "Russ Painter",
   "license": "UNLICENSED",
   "scripts": {
-    "poc": "pnpm --filter mermaid-draw-web dev",
+    "dev:web": "pnpm --filter mermaid-draw-web dev",
     "vscode:package": "pnpm --filter mermaid-draw-vscode package",
     "test": "node --test \"tests/**/*.test.ts\"",
     "test:smoke": "node --test \"tests/browser/*.smoke.ts\"",

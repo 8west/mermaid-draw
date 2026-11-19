@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements } from '@excalidraw/excalidraw';
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, newElementWith } from '@excalidraw/excalidraw';
+import type { ExcalidrawElement, ExcalidrawLinearElement } from '@excalidraw/excalidraw/element/types';
 import type { AppState, BinaryFiles, ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types';
 import '@excalidraw/excalidraw/index.css';
 import { parseMermaidToExcalidraw } from '@excalidraw/mermaid-to-excalidraw';
@@ -8,8 +8,9 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { readCanvasExtras, remapCanvasReferences, writeCanvasExtras } from '@mermaid-draw/core/canvas-extras';
+import { readMappedDiagram } from '@mermaid-draw/core/mapped-diagram';
 import {
-  ARCHITECT_ROUGHNESS, appearanceOverrides, chooseNodeId, getArrowLayout, getRelationshipSyntax, isSimpleLabel, readFlowchart, removeNodes,
+  ARCHITECT_ROUGHNESS, appearanceOverrides, chooseNodeId, getArrowLayout, getRelationshipSyntax, isSimpleLabel, normalizeArrowPoints, readFlowchart, removeNodes,
   removeRelationship, renameNewNode, restorePositions, writeArrow, writeLabel, writeNodeStyle, writePosition, writeRelationship,
 } from '@mermaid-draw/core/flowchart';
 
@@ -54,6 +55,52 @@ let edgeEndpoints = new Map<string, {
 let canvasExtrasBaseline = '';
 let editor: Root | undefined;
 let api: ExcalidrawImperativeAPI | undefined;
+let mapped: ReturnType<typeof readMappedDiagram>;
+let mappedBaseline: readonly Pick<ExcalidrawElement, 'id' | 'x' | 'y' | 'version' | 'versionNonce' | 'strokeColor' | 'backgroundColor'>[] = [];
+let relationshipAnnotations = new Map<string, { arrowId: string; ratio: number; x: number; y: number }>();
+
+function arrowAnchor(arrow: Pick<ExcalidrawLinearElement, 'x' | 'y' | 'points'>, ratio: number) {
+  const [startX, startY] = arrow.points[0];
+  const [endX, endY] = arrow.points.at(-1)!;
+  return { x: arrow.x + startX + (endX - startX) * ratio, y: arrow.y + startY + (endY - startY) * ratio };
+}
+
+function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: ExcalidrawImperativeAPI) {
+  const scene = convertToExcalidrawElements(diagram.elements, { regenerateIds: false });
+  for (const [index, element] of scene.entries()) {
+    if (element.type !== 'arrow' || !element.points.length) continue;
+    const [firstX, firstY] = element.points[0];
+    if (firstX === 0 && firstY === 0) continue;
+    // Excalidraw's skeleton converter may offset the first point by half a pixel.
+    scene[index] = { ...element, ...normalizeArrowPoints(element.points.map(
+      ([x, y]) => [x + element.x, y + element.y],
+    )) };
+  }
+  mapped = diagram;
+  // Excalidraw can mutate the elements passed to updateScene during the next gesture.
+  mappedBaseline = scene.map(({ id, x, y, version, versionNonce, strokeColor, backgroundColor }) =>
+    ({ id, x, y, version, versionNonce, strokeColor, backgroundColor }));
+  const byId = new Map(scene.map((element) => [element.id, element]));
+  relationshipAnnotations = new Map();
+  for (const arrow of scene) {
+    if (arrow.type !== 'arrow' || !arrow.startBinding || !arrow.endBinding || !arrow.points.length) continue;
+    for (const [suffix, ratio] of [['left', 0], ['label', 0.5], ['right', 1]] as const) {
+      const label = byId.get(`${arrow.id}:${suffix}`);
+      if (label?.type !== 'text') continue;
+      const anchor = arrowAnchor(arrow, ratio);
+      relationshipAnnotations.set(label.id, { arrowId: arrow.id, ratio, x: label.x - anchor.x, y: label.y - anchor.y });
+    }
+  }
+  if (mounted) {
+    // Line-slot IDs belong to this projection; previous canvas undo entries cannot address them safely.
+    mounted.history.clear();
+    mounted.updateScene({ elements: scene, appState: { selectedElementIds: {}, selectedGroupIds: {} },
+      captureUpdate: CaptureUpdateAction.NEVER });
+  } else if (canvasHost.value) {
+    editor = createRoot(canvasHost.value);
+    renderEditor({ elements: scene, scrollToContent: true });
+  }
+}
 
 // Activating a tab or showing a notice above the canvas can move it without resizing it.
 watch([() => props.active, () => props.layoutSignal, error, canvasError], () => {
@@ -68,6 +115,16 @@ async function applySource() {
   canvasError.value = '';
   const input = props.initialSource;
   try {
+    const mapping = readMappedDiagram(input);
+    if (mapping) {
+      const mounted = editor ? await canvasApi : undefined;
+      if (!canvasHost.value || run !== applyRun) return;
+      installMappedScene(mapping, mounted);
+      error.value = '';
+      applied.value = input;
+      status.value = 'Source applied.';
+      return;
+    }
     const extras = readCanvasExtras(input);
     const diagram = readFlowchart(input);
     const parsed = diagram.nodeIds.size ? await parseMermaidToExcalidraw(extras.mermaid) : undefined;
@@ -100,6 +157,7 @@ async function applySource() {
     if (run !== applyRun) return;
 
     // Install the new baseline before updateScene can notify onChange.
+    mapped = undefined;
     nodes = next;
     nodeIds = new Map([...nodes.keys()].map((id) => [id, id]));
     // The converter emits each subgraph heading as a separate `${id}__title` shape.
@@ -184,8 +242,51 @@ watch(() => props.initialSource, (source) => {
 });
 
 function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, files: BinaryFiles) {
-  if (busy.value || error.value || state.isLoading || state.selectedElementsAreBeingDragged
-    || state.isResizing || state.cursorButton === 'down') return;
+  if (busy.value || error.value || state.isLoading) return;
+  if (state.selectedElementsAreBeingDragged || state.isResizing || state.cursorButton === 'down') {
+    if (mapped && api && state.selectedElementsAreBeingDragged && relationshipAnnotations.size) {
+      const byId = new Map(elements.map((element) => [element.id, element]));
+      let changed = false;
+      const preview = elements.map((element) => {
+        const annotation = relationshipAnnotations.get(element.id);
+        if (!annotation || element.isDeleted) return element;
+        const arrow = byId.get(annotation.arrowId);
+        if (arrow?.type !== 'arrow' || arrow.isDeleted || !arrow.points.length) return element;
+        const anchor = arrowAnchor(arrow, annotation.ratio);
+        const x = anchor.x + annotation.x;
+        const y = anchor.y + annotation.y;
+        if (Math.abs(x - element.x) < 0.001 && Math.abs(y - element.y) < 0.001) return element;
+        changed = true;
+        return newElementWith(element, { x, y });
+      });
+      if (changed) api.updateScene({ elements: preview, captureUpdate: CaptureUpdateAction.NEVER });
+    }
+    return;
+  }
+  if (mapped) {
+    if (!api || state.editingTextElement) return;
+    const live = elements.filter(({ isDeleted }) => !isDeleted);
+    if (live.length === mappedBaseline.length && live.every((element, index) => {
+      const before = mappedBaseline[index];
+      return before.id === element.id && before.version === element.version && before.versionNonce === element.versionNonce;
+    })) return;
+    const previous = mapped;
+    let updated = applied.value;
+    canvasError.value = '';
+    try {
+      updated = previous.update(mappedBaseline, live);
+    } catch (failure) {
+      canvasError.value = failure instanceof Error ? failure.message : String(failure);
+    }
+    const next = updated === applied.value ? previous : readMappedDiagram(updated);
+    if (!next) throw new Error('Mapped canvas produced unsupported Mermaid.');
+    installMappedScene(next, api);
+    if (updated !== applied.value) {
+      applied.value = updated;
+      status.value = 'Canvas change written to Mermaid.';
+    }
+    return;
+  }
   const live = new Map(elements.filter(({ isDeleted }) => !isDeleted).map((element) => [element.id, element]));
   const deleted = new Set<string>();
   let updated = applied.value;

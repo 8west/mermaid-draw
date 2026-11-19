@@ -6,7 +6,7 @@
 - Deploy static assets only. There is no backend, server-side rendering, or server API.
 - Run all application logic in the browser, including file import and export, Mermaid conversion, rendering, and editing. File contents stay on the user's device.
 - Keep Markdown import/export, Mermaid validation and source edits, and Excalidraw metadata serialization in [the shared core](../packages/mermaid_draw_core). The web workspace owns tabs and the live canvas; the VS Code extension reuses the same source logic and canvas.
-- Mermaid flowcharts are currently the only editable diagram type; other Mermaid types remain read-only.
+- Mermaid flowcharts and a subset of sequence and class diagrams are editable; unsupported diagrams remain read-only.
 
 ## VS Code extension
 

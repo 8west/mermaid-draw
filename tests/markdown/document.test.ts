@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { openDocument } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
 
 test('one Markdown export combines edits without touching the rest of the file', () => {
-  const original = readFileSync(new URL('./three-flowcharts.md', import.meta.url), 'utf8').replace(/\r?\n/g, '\r\n');
+  const original = readFileSync(new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url), 'utf8').replace(/\r?\n/g, '\r\n');
   const document = openDocument('orders.md', original);
   assert.deepEqual(document.diagrams.map(({ title }) => title), [
     'Receive the order', 'Prepare the package', 'Ship the package',
@@ -17,7 +17,7 @@ test('one Markdown export combines edits without touching the rest of the file',
 });
 
 test('unsupported blocks keep their document index and are preserved even when another block changes', () => {
-  const original = '## Overview\n\nSome prose.\n\n~~~mermaid\nsequenceDiagram\nA->>B: Ping\n~~~\n\n'
+  const original = '## Overview\n\nSome prose.\n\n~~~mermaid\nsequenceDiagram\nloop Retry\nA->>B: Ping\nend\n~~~\n\n'
     + '```mermaid\nflowchart LR\nA[Before]\n```\n';
   const document = openDocument('mixed.md', original);
   assert.deepEqual(document.diagrams.map(({ title, editable }) => [title, editable]), [

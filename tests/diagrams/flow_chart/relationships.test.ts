@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import {
   chooseNodeId, getRelationshipSyntax, readFlowchart, removeRelationship, renameNewNode, resetCanvasFormatting, writeArrow, writeLabel,
   writePosition, writeRelationship,
-} from '../../packages/mermaid_draw_core/src/flowchart.ts';
+} from '../../../packages/mermaid_draw_core/src/flowchart.ts';
 
 test('redraw accepts subgraphs with a local direction', () => {
   const source = readFileSync(new URL('./subgraph.mermaid', import.meta.url), 'utf8');

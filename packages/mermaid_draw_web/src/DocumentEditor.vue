@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, shallowRef, watch } from 'vue';
-import { openDocument } from '@mermaid-draw/core/document';
-import { resetCanvasFormatting } from '@mermaid-draw/core/flowchart';
+import { openDocument, resetDiagramFormatting } from '@mermaid-draw/core/document';
 import mermaidIcon from './assets/mermaid-pencil.svg';
 import RenderPrototype from './RenderPrototype.vue';
 
@@ -28,11 +27,11 @@ const dirty = computed(() => editorText.value !== sourceText.value.replace(/\r\n
 const activeSlot = computed(() => slots.value.find(({ key }) => key === selected.value));
 const canResetStyles = computed(() => {
   const slot = activeSlot.value;
-  if (!slot?.diagram.editable || loading.value || dirty.value) return false;
+  if (!slot?.diagram.resettable || loading.value || dirty.value) return false;
   const state = states.get(slot.key);
   if (state?.busy || state?.error) return false;
   const source = state?.source ?? slot.diagram.source;
-  return resetCanvasFormatting(source, slot.diagram.source) !== source;
+  return resetDiagramFormatting(source, slot.diagram.source) !== source;
 });
 const failures = computed(() => slots.value.flatMap(({ key, diagram }) => {
   const error = states.get(key)?.error;
@@ -112,7 +111,7 @@ function resetStyles() {
     [diagram.id, states.get(key)?.source ?? diagram.source],
   ));
   const source = edits.get(slot.diagram.id) ?? slot.diagram.source;
-  edits.set(slot.diagram.id, resetCanvasFormatting(source, slot.diagram.source));
+  edits.set(slot.diagram.id, resetDiagramFormatting(source, slot.diagram.source));
   const diagramId = slot.diagram.id;
   install(openDocument(current.value.name, current.value.save(edits)), true);
   selected.value = slots.value.find(({ diagram }) => diagram.id === diagramId)?.key ?? 0;
@@ -202,7 +201,7 @@ function download() {
               :aria-controls="`editor-panel-${key}`" @click="selectTab(key)" @keydown="moveTab($event, key)"
             >{{ diagram.title }}</button>
           </div>
-          <button v-if="activeSlot?.diagram.editable" type="button" class="action secondary reset-styles"
+          <button v-if="activeSlot?.diagram.resettable" type="button" class="action secondary reset-styles"
             :disabled="!canResetStyles" @click="resetStyles"
           >Reset styles</button>
           <button type="button" class="diagnostics-toggle" aria-label="Diagnostics" title="Diagnostics"
@@ -223,7 +222,7 @@ function download() {
             <template v-for="{ key, diagram } in slots" :key="key">
               <dt>{{ diagram.title }}</dt>
               <dd :class="{ 'diagnostics-error': states.get(key)?.error }">
-                {{ !diagram.editable ? 'Read only: only flowcharts can be edited.' :
+                {{ !diagram.editable ? 'Read only: unsupported diagram type or syntax.' :
                   states.get(key)?.error || states.get(key)?.status || 'Loading Mermaid...' }}
               </dd>
             </template>
@@ -264,7 +263,7 @@ function download() {
             :layout-signal="layoutSignal" @state="updateCanvas(key, $event)"
           />
           <template v-else>
-            <p class="empty-note">Read only. Only flowcharts can be edited on the canvas.</p>
+            <p class="empty-note">Read only. This diagram type or syntax cannot be edited on the canvas.</p>
             <pre>{{ diagram.source }}</pre>
           </template>
         </section>

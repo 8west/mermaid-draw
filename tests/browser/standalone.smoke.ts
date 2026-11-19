@@ -6,9 +6,9 @@ import { chromium } from 'playwright';
 
 const dist = new URL('../../packages/mermaid_draw_web/dist/', import.meta.url);
 const entry = new URL('index.html', dist);
-const standalone = new URL('../flow_chart/flow_chart1.mermaid', import.meta.url);
-const subgraph = new URL('../flow_chart/subgraph.mermaid', import.meta.url);
-const markdown = new URL('../markdown/three-flowcharts.md', import.meta.url);
+const standalone = new URL('../diagrams/flow_chart/flow_chart1.mermaid', import.meta.url);
+const subgraph = new URL('../diagrams/flow_chart/subgraph.mermaid', import.meta.url);
+const markdown = new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url);
 
 test('the standalone build edits and downloads local files offline', { timeout: 45_000 }, async () => {
   assert.deepEqual(await readdir(dist), ['index.html']);
