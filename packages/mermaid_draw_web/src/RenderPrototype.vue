@@ -56,7 +56,9 @@ let canvasExtrasBaseline = '';
 let editor: Root | undefined;
 let api: ExcalidrawImperativeAPI | undefined;
 let mapped: ReturnType<typeof readMappedDiagram>;
-let mappedBaseline: readonly Pick<ExcalidrawElement, 'id' | 'x' | 'y' | 'version' | 'versionNonce' | 'strokeColor' | 'backgroundColor'>[] = [];
+let mappedBaseline: readonly (Pick<ExcalidrawElement, 'id' | 'x' | 'y' | 'version' | 'versionNonce' | 'strokeColor' | 'backgroundColor' |
+  'strokeWidth' | 'strokeStyle' | 'opacity' | 'roughness'>
+  & Partial<Pick<ExcalidrawLinearElement, 'startBinding' | 'endBinding'>>)[] = [];
 let relationshipAnnotations = new Map<string, { arrowId: string; ratio: number; x: number; y: number }>();
 
 function arrowAnchor(arrow: Pick<ExcalidrawLinearElement, 'x' | 'y' | 'points'>, ratio: number) {
@@ -78,8 +80,13 @@ function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: Excal
   }
   mapped = diagram;
   // Excalidraw can mutate the elements passed to updateScene during the next gesture.
-  mappedBaseline = scene.map(({ id, x, y, version, versionNonce, strokeColor, backgroundColor }) =>
-    ({ id, x, y, version, versionNonce, strokeColor, backgroundColor }));
+  mappedBaseline = scene.map((element) => {
+    const { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness } = element;
+    return { id, x, y, version, versionNonce, strokeColor, backgroundColor, strokeWidth, strokeStyle, opacity, roughness, ...(element.type === 'arrow' && {
+      startBinding: element.startBinding && { ...element.startBinding },
+      endBinding: element.endBinding && { ...element.endBinding },
+    }) };
+  });
   const byId = new Map(scene.map((element) => [element.id, element]));
   relationshipAnnotations = new Map();
   for (const arrow of scene) {

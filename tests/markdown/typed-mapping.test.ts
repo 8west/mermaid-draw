@@ -120,9 +120,143 @@ test('untouched scenes do not rewrite source and an invalid canvas label is reje
   }
 });
 
+test('class notes import as editable text and preserve their class attachment and line breaks', () => {
+  const source = 'classDiagram\n    note "Inventory"\n    Product <|-- Book\n    note for Book "First<br/>Second"\n    class Book{\n        +String title\n    }\n';
+  const document = openDocument('notes.mermaid', source);
+  assert.equal(document.diagrams[0].editable, true);
+  const mapping = readMappedDiagram(source)!;
+  const scene = mapping.elements.flatMap((element) => {
+    const shape = { id: element.id!, x: element.x, y: element.y };
+    return 'label' in element && element.label?.id
+      ? [shape, { ...shape, id: element.label.id, originalText: element.label.text }] : [shape];
+  });
+  assert.ok(scene.some((element) => 'originalText' in element && element.originalText === 'Inventory'));
+  const attached = scene.find((element) => 'originalText' in element && element.originalText === 'First\nSecond');
+  assert.ok(attached);
+  assert.equal(mapping.update(scene, scene), source);
+  assert.equal(mapping.update(scene, scene.map((element) => element === attached
+    ? { ...element, originalText: 'Revised\nSecond' } : element)), source.replace('First<br/>Second', 'Revised<br>Second'));
+});
+
 test('unknown class syntax is read-only and its source is preserved', () => {
   const source = 'classDiagram\nnamespace Sales {\n    class Order\n}\n';
   const document = openDocument('sales.mermaid', source);
   assert.equal(document.diagrams[0].editable, false);
   assert.equal(document.save(new Map([[1, 'classDiagram\nclass Other\n']])), source);
+});
+
+test('nested concurrent states preserve scoped markers, notes, and transition targets after an alias edit', () => {
+  const { mapping, scene, diagram } = fixture('state');
+  const updated = mapping.update(scene, scene.map((element) => element.originalText === 'Idle'
+    ? { ...element, originalText: 'Waiting for work' } : element));
+  assert.match(updated, /state "Waiting for work" as Idle/);
+  assert.match(updated, /\[\*\] --> Idle\n\s*Idle --> Running: begin\n\s*Running --> \[\*\]\n\s*--\n\s*\[\*\] --> Listening/);
+  assert.match(updated, /note right of Active : Two regions/);
+  assert.equal(mapping.update(scene, scene), diagram.source);
+  assert.ok(readMappedDiagram(updated));
+});
+
+test('the state documentation example lays out the main path and routes shortcuts around it', () => {
+  const source = `---
+title: Simple sample
+---
+stateDiagram-v2
+    [*] --> Still
+    Still --> [*]
+
+    Still --> Moving
+    Moving --> Still
+    Moving --> Crash
+    Crash --> [*]
+`;
+  const mapping = readMappedDiagram(source)!;
+  const boxes = ['start:marker', 'Still', 'Moving', 'Crash', 'end:marker'].map((name) =>
+    mapping.elements.find((element) => element.id === `state:/0/${name}` && (element.type === 'rectangle' || element.type === 'ellipse'))!);
+  for (const [index, box] of boxes.slice(1).entries()) {
+    assert.ok(box.y > boxes[index].y + boxes[index].height, 'the end marker must follow the main path');
+    assert.equal(box.x + box.width / 2, boxes[0].x + boxes[0].width / 2);
+  }
+  const arrows = mapping.elements.filter((element) => element.type === 'arrow');
+  const shortcut = arrows.find((arrow) => arrow.start?.id === 'state:/0/Still' && arrow.end?.id === 'state:/0/end:marker')!;
+  const back = arrows.find((arrow) => arrow.start?.id === 'state:/0/Moving' && arrow.end?.id === 'state:/0/Still')!;
+  assert.ok(shortcut.points?.slice(1, -1).length && shortcut.points.slice(1, -1).every(([x]) => shortcut.x + x < boxes[2].x));
+  assert.ok(back.points?.slice(1, -1).length && back.points.slice(1, -1).every(([x]) => back.x + x > boxes[2].x + boxes[2].width));
+});
+
+test('state arrow styling survives line changes, and reset and deletion remove only its formatting', () => {
+  const source = 'stateDiagram-v2\n    Start --> Ready: go\n    Ready --> Start: return\n';
+  const mapping = readMappedDiagram(source)!;
+  const before = mapping.elements.map((element) => ({ id: element.id!, x: element.x, y: element.y, strokeColor: '#1e1e1e' }));
+  const arrow = mapping.elements.find((element) => element.type === 'arrow' && element.label?.text === 'go')!;
+  const updated = mapping.update(before, before.map((element) => element.id === arrow.id
+    ? { ...element, strokeColor: '#e03131', strokeWidth: 4, strokeStyle: 'dashed', opacity: 60, roughness: 1 } : element));
+  assert.match(updated, /Start --> Ready: go\n +%% graph-transition-style /);
+  const shifted = updated.replace('stateDiagram-v2\n', 'stateDiagram-v2\n    %% keep\n');
+  const reopened = readMappedDiagram(shifted)!;
+  const [styled, unstyled] = reopened.elements.filter((element) => element.type === 'arrow');
+  assert.deepEqual([styled.strokeColor, styled.strokeWidth, styled.strokeStyle, styled.opacity, styled.roughness],
+    ['#e03131', 4, 'dashed', 60, 1]);
+  assert.notEqual(unstyled.strokeColor, '#e03131');
+  assert.equal(resetDiagramFormatting(shifted, source), source.replace('stateDiagram-v2\n', 'stateDiagram-v2\n    %% keep\n'));
+  const scene = reopened.elements.map((element) => ({ id: element.id!, x: element.x, y: element.y }));
+  const deleted = reopened.update(scene, scene.filter(({ id }) => id !== styled.id));
+  assert.doesNotMatch(deleted, /graph-transition-style|Start --> Ready/);
+  assert.match(deleted, /Ready --> Start: return/);
+});
+
+test('entity relationship edits preserve keys, subgraphs, cardinalities, and relationship identity', () => {
+  const { mapping, scene, diagram } = fixture('entity_relationship');
+  const updated = mapping.update(scene, scene.map((element) => {
+    if (element.originalText === 'string? email UK "Contact address"') {
+      return { ...element, originalText: 'string? billingEmail UK "Billing address"' };
+    }
+    if (element.originalText === 'places') return { ...element, originalText: 'places order' };
+    return element;
+  }));
+  assert.equal(updated, diagram.source
+    .replace('string? email UK "Contact address"', 'string? billingEmail UK "Billing address"')
+    .replace('CUSTOMER ||--o{ ORDER : places', 'CUSTOMER ||--o{ ORDER : "places order"'));
+  assert.ok(readMappedDiagram(updated));
+});
+
+test('adding a transition in a concurrent region writes it before that region closes', () => {
+  const { mapping, scene, diagram } = fixture('state');
+  const idle = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Idle')!;
+  const running = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Running')!;
+  const next = mapping.update(scene, [...scene, {
+    id: 'drawn-transition', type: 'arrow', x: 0, y: 0,
+    startBinding: { elementId: running.id! }, endBinding: { elementId: idle.id! },
+  }]);
+  assert.match(next, /Running --> \[\*\]\n\s*Running --> Idle\n\s*--/);
+});
+
+test('resetting entity formatting restores authored styles without reverting attribute edits', () => {
+  const { diagram } = fixture('entity_relationship');
+  const source = diagram.source.replace('    direction LR', '    direction LR\n    style CUSTOMER stroke:#1971c2');
+  const mapping = readMappedDiagram(source)!;
+  const scene = mapping.elements.map((element) => ({
+    id: element.id!, x: element.x, y: element.y, originalText: element.type === 'text' ? element.text : undefined,
+    strokeColor: 'strokeColor' in element ? element.strokeColor : undefined,
+  }));
+  const owner = 'entity:CUSTOMER';
+  const updated = mapping.update(scene, scene.map((element) => {
+    if (element.id === owner) return { ...element, x: element.x + 25, backgroundColor: '#ffc9c9' };
+    if (element.originalText === 'int id PK') return { ...element, originalText: 'uuid id PK' };
+    return element;
+  }));
+  assert.match(updated, /style CUSTOMER fill:#ffc9c9/);
+  const reopened = readMappedDiagram(updated)!.elements.find((element) => element.id === owner);
+  assert.equal(reopened?.strokeColor, '#1971c2');
+  assert.equal(reopened?.backgroundColor, '#ffc9c9');
+  assert.equal(resetDiagramFormatting(updated, source), source.replaceAll('int id PK', 'uuid id PK'));
+});
+
+test('drawing attribute text inside an entity adds it to that entity without moving relationships', () => {
+  const { mapping, scene, diagram } = fixture('entity_relationship');
+  const box = mapping.elements.find((element) => element.id === 'entity:CUSTOMER')!;
+  const before = scene.map((element) => element.id === box.id ? { ...element, width: 280, height: 100 } : element);
+  const updated = mapping.update(before, [...before, {
+    id: 'drawn-attribute', type: 'text', originalText: 'string externalId UK', x: box.x + 10, y: box.y + 55,
+  }]);
+  assert.equal(updated, diagram.source.replace('"Contact address"\n', '"Contact address"\n            string externalId UK\n'));
 });

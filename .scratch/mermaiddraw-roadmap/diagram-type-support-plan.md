@@ -4,9 +4,9 @@ Updated 2026-11-19. This is a planning input, not a commitment to implement ever
 
 ## Current scope
 
-The web and VS Code editors support flowcharts and a subset of sequence and class diagrams. Other diagram types and blocks with unsupported sequence or class syntax are shown as read-only source and preserved ([README](../../README.md), [VS Code README](../../packages/mermaid_draw_vscode/README.md), [document parser](../../packages/mermaid_draw_core/src/diagramDocument.ts)).
+The web and VS Code editors support flowcharts and subsets of sequence, class, state, and entity relationship diagrams. Other diagram types and blocks with unsupported syntax are shown as read-only source and preserved ([README](../../README.md), [VS Code README](../../packages/mermaid_draw_vscode/README.md), [document parser](../../packages/mermaid_draw_core/src/diagramDocument.ts)).
 
-Converter output does not imply canvas editing support. MermaidDraw owns the round-trip mapping for [sequence and class diagrams](../../packages/mermaid_draw_core/src/mappedDiagram.ts).
+Converter output does not imply canvas editing support. MermaidDraw owns the round-trip mappings behind [diagram detection](../../packages/mermaid_draw_core/src/mappedDiagram.ts).
 
 ## Rating guide
 
@@ -25,8 +25,8 @@ The official Mermaid syntax reference and diagram pages describe the syntax and 
 | [Flowchart](https://mermaid.js.org/syntax/flowchart.html) | Implemented | High | High | Medium | Elements | Current baseline: explicit nodes and relationships map naturally, while subgraphs and edge identity still need care. |
 | [Sequence](https://mermaid.js.org/syntax/sequenceDiagram.html) | Partial | High | High | High | Elements | Alias, message, and note edits, reordering, and saved colors and positions are available; nested control structures and activations remain unsupported. |
 | [Class](https://mermaid.js.org/syntax/classDiagram.html) | Partial | High | Medium | High | Elements | Class labels, members, relationship labels, positions, and class box colors are editable; operators and multiplicities are preserved. Structural edits stay in source. |
-| [State](https://mermaid.js.org/syntax/stateDiagram.html) | No support | High | High | Medium | Elements | States and transitions resemble flowcharts; composite states, start/end pseudostates, and state-specific syntax add complexity. |
-| [Entity relationship](https://mermaid.js.org/syntax/entityRelationshipDiagram.html) | No support | High | High | Medium | Elements | Entity boxes and crow's-foot relations fit well; attribute lists and cardinality must survive editing. Mermaid marks this syntax experimental in its diagram index. |
+| [State](https://mermaid.js.org/syntax/stateDiagram.html) | Partial | High | High | Medium | Elements | Supports multiline composite and concurrent states, start/end markers, choice/fork/join, notes, and adding or removing states and transitions. Some source forms and structural operations remain unsupported. |
+| [Entity relationship](https://mermaid.js.org/syntax/entityRelationshipDiagram.html) | Partial | High | High | Medium | Elements | Supports nested subgraphs, entity aliases, attribute editing, and adding or removing entities and relationships. Some source forms and structural operations remain unsupported. |
 | [C4](https://mermaid.js.org/syntax/c4.html) | No support | High | Medium | High | Image | Useful architecture views, but nested boundaries and multiple text fields need a MermaidDraw-owned model. |
 | [Architecture](https://mermaid.js.org/syntax/architecture.html) | No support | High | Medium | High | Image | Services and connections are shape-friendly; icons, edge attachment, and beta syntax are concerns. Revisit when syntax stabilizes. |
 | [Requirement](https://mermaid.js.org/syntax/requirementDiagram.html) | No support | Medium | High | Medium | Image | Requirement boxes and typed links fit; identifiers, fields, and relation constraints remain semantic data. |
@@ -90,11 +90,19 @@ The [sequence mapping fixture](../../tests/diagrams/sequence/sequence-mapping.md
 
 The [class mapping fixture](../../tests/diagrams/class/class-mapping.md) covers class labels, members, relationship labels, and repeated class moves. Relationship lines, labels, and multiplicities follow the boxes. Positions use `%% class-layout` comments and class colors use native Mermaid `style` statements. Changing the class or relationship structure is source-only; unsupported constructs such as namespaces keep the block read-only.
 
+## State and entity relationship diagrams
+
+The default state layout follows transitions from each region's start marker, places its end marker after the states, and routes return transitions and shortcuts beside the main path. Saved positions still override the default layout.
+
+The [state fixture](../../tests/diagrams/state/state-mapping.md) covers scoped start/end markers, a composite state, concurrent regions, a choice, and a note. The [entity relationship fixture](../../tests/diagrams/entity_relationship/entity_relationship-mapping.md) covers nested subgraphs, aliases, optional attribute types, keys, comments, cardinality, and identifying and non-identifying relationships.
+
+Draw a rectangle to add a state or entity; draw an arrow between nodes to add a transition or relationship. Place text like `string externalId UK` inside an entity to add an attribute. Existing labels, node positions, and node colors are editable. Connector endpoint changes preserve state scope or relationship cardinality. Creating composite states, concurrent regions, or subgraphs remains source-only. The line-oriented mapper does not cover every Mermaid form (for example, attribute blocks written on one line).
+
 ## Recommended order
 
 1. Harden the existing flowchart, sequence, and class mappings where needed.
-2. Add state diagrams, which share the most with flowcharts and are emitted as elements by the converter.
-3. Add ER diagrams, with attention to attribute lists and cardinality.
+2. Expand state syntax coverage and canvas controls for composite states and concurrent regions.
+3. Expand entity relationship syntax coverage and add canvas controls for creating subgraphs.
 4. Consider C4 and Architecture after designing a MermaidDraw-owned mapping; wait for Architecture syntax to stabilize.
 5. Revisit medium-value shape types (Block, Requirement, Use Case, Swimlanes, Agentflow, Event Modeling, TreeView) based on demand.
 6. Keep chart/data-heavy and niche types read-only unless user demand justifies a data-aware editor.
@@ -104,7 +112,7 @@ The [class mapping fixture](../../tests/diagrams/class/class-mapping.md) covers 
 - The converter comparison is based on documentation and source, not a runtime survey. The MermaidDraw status reflects the current implementation.
 - The Mermaid type list comes from the live official docs sidebar and was cross-checked against Mermaid's docs configuration. The live docs and the configuration differ on Grid Layout.
 - The installed converter is 3.6.0, but its registry-reported source commit has a checked-in package manifest showing 3.5.0. The converter source observations are not a verified audit of the published 3.6.0 tarball.
-- The installed converter emits elements for Flowchart, Sequence, Class, ER, State, Gantt, Quadrant, and Timeline; other types are returned as images. The [converter API docs](https://docs.excalidraw.com/docs/@excalidraw/mermaid-to-excalidraw/api) describe the generic conversion contract.
+- The installed converter emits elements for Flowchart, Sequence, Class, Entity Relationship, State, Gantt, Quadrant, and Timeline; other types are returned as images. The [converter API docs](https://docs.excalidraw.com/docs/@excalidraw/mermaid-to-excalidraw/api) describe the generic conversion contract.
 - Mermaid documentation is ahead of this repository's resolved Mermaid 11.17.2; version-gated syntax, including newer diagram types, must be checked against the actual renderer version before implementation.
 - Value ratings are subjective and based on software-design relevance, not usage data. Detailed review concentrated on Sequence; most other type pages were read only at their introductions and examples.
 - Converter-specific `customData` survival across scene updates and copy/paste was not assessed.

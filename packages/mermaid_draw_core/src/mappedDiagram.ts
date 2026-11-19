@@ -1,5 +1,6 @@
 import type { convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import type { Arrowhead } from '@excalidraw/excalidraw/element/types';
+import { readGraphDiagram } from './graphDiagram.ts';
 
 type Skeleton = NonNullable<Parameters<typeof convertToExcalidrawElements>[0]>[number];
 type Point = { x: number; y: number };
@@ -17,6 +18,7 @@ const participantPattern = new RegExp(`^(participant|actor)\\s+(${identifier})(?
 const messagePattern = new RegExp(`^(${identifier}?)[ \\t]*(-->>|->>)[ \\t]*(${identifier})[ \\t]*:[ \\t]*(.+)$`);
 const notePattern = new RegExp(`^Note\\s+(left of|right of|over)\\s+(${identifier})(?:\\s*,\\s*(${identifier}))?\\s*:\\s*(.+)$`, 'i');
 const classPattern = new RegExp(`^class\\s+(${identifier})(?:\\["([^"\\]]+)"\\])?\\s*(\\{)?$`);
+const classNotePattern = new RegExp(`^note\\s+(?:for\\s+(${identifier})\\s+)?"([^"]+)"$`);
 const memberPattern = /^[+#~$()\w \t.,[\]<>?:-]+$/;
 const relationPattern = new RegExp(`^(${identifier}?)(?:\\s+"([^"]+)")?\\s*(<\\|--|--\\|>|<\\|\\.\\.|\\.\\.\\|>|\\*--|--\\*|o--|--o|<--|-->|<\\.\\.|\\.\\.>|--|\\.\\.)\\s*(?:"([^"]+)"\\s*)?(${identifier})(?:\\s*:\\s*(.+))?$`);
 const inlineMemberPattern = new RegExp(`^(${identifier})\\s*:\\s*(.+)$`);
@@ -52,6 +54,8 @@ export function diagramHeader(lines: readonly string[]): number {
 function simpleText(text: string) {
   return Boolean(text.trim()) && !/[\n\r;#%<>"`]/.test(text);
 }
+
+const classNoteText = (text: string) => Boolean(text.trim()) && !/[\r"<>]/.test(text);
 
 function memberText(text: string) {
   return memberPattern.test(text) && !/<<|>>/.test(text);
@@ -311,6 +315,7 @@ function replaceText(line: string, before: string, after: string) {
 function readClasses(source: string, lines: string[], header: number) {
   const classes = new Map<string, ClassBox>();
   const relations: Relationship[] = [];
+  const notes: (Statement & { target?: string; raw: string })[] = [];
   const positions = new Map<string, Point & { line: number }>();
   const styles = new Map<string, { line: number; colors: DiagramColors }>();
   let block: ClassBox | undefined;
@@ -340,7 +345,13 @@ function readClasses(source: string, lines: string[], header: number) {
     const relation = body.match(relationPattern);
     const member = body.match(inlineMemberPattern);
     const style = body.match(classStylePattern);
-    if (style) {
+    const note = body.match(classNotePattern);
+    if (note) {
+      const [, target, raw] = note;
+      const text = raw.replace(/<br\s*\/?>/gi, '\n').trim();
+      if (!classNoteText(text)) return undefined;
+      notes.push({ id: `class-note:${line}`, line, target, raw, text });
+    } else if (style) {
       const [, id, properties] = style;
       if (styles.has(id)) return undefined;
       const colors = readColors(properties);
@@ -361,7 +372,8 @@ function readClasses(source: string, lines: string[], header: number) {
       ensureClass(member[1]).members.push({ id: `member:${line}`, line, text: member[2] });
     } else return undefined;
   }
-  if (block || [...styles.keys()].some((id) => !classes.has(id))) return undefined;
+  if (block || [...styles.keys()].some((id) => !classes.has(id)) ||
+    notes.some(({ target }) => target !== undefined && !classes.has(target))) return undefined;
   const elements: Skeleton[] = [];
   let offset = 0;
   const geometry = new Map<string, Point & { width: number; height: number }>();
@@ -407,6 +419,20 @@ function readClasses(source: string, lines: string[], header: number) {
     if (left) elements.push({ ...text(`${id}:left`, left, start.x + (end.x < start.x ? -textWidth(left) - 8 : 8), start.y + 8, id), locked: true });
     if (right) elements.push({ ...text(`${id}:right`, right, end.x + (end.x > start.x ? -textWidth(right) - 8 : 8), end.y + 8, id), locked: true });
   }
+  let noteY = Math.max(0, ...[...geometry.values()].map(({ y, height }) => y + height)) + 48;
+  for (const { id, target, text: label } of notes) {
+    const rows = label.split('\n');
+    const width = Math.max(144, ...rows.map((row) => textWidth(row) + 24));
+    const height = 24 + rows.length * 22;
+    const owner = target === undefined ? undefined : geometry.get(target);
+    const center = owner ? owner.x + owner.width / 2 : width / 2;
+    const x = center - width / 2;
+    if (owner) elements.unshift(segment(`${id}:connector`, { x: center, y: owner.y + owner.height + 4 },
+      { x: center, y: noteY - 4 }, { heads: [null, null], dashed: true, locked: true,
+        bindings: { start: { id: `class:${target}` }, end: { id } } }));
+    elements.push({ ...box(id, x, noteY, width, height, 'dashed'), groupIds: [], label: sequenceLabel(id, label) });
+    noteY += height + 32;
+  }
   const diagram = mapping(source, elements, (edit) => {
     const output = [...lines];
     const added: string[] = [];
@@ -450,6 +476,10 @@ function readClasses(source: string, lines: string[], header: number) {
         output[line] = label ? replaceText(lines[line], text, label)
           : lines[line].slice(0, offset).replace(/[ \t]*:[ \t]*$/, '') + lines[line].slice(offset + text.length);
       }
+      for (const { id, line, text, raw } of notes) {
+        const label = edit.label(id, text, classNoteText);
+        if (label !== text) output[line] = replaceText(lines[line], raw, label.replaceAll('\n', '<br>'));
+      }
     }
     if (added.length) output.splice(output.at(-1) === '' ? output.length - 1 : output.length, 0, ...added);
     return output.join('\n');
@@ -465,5 +495,8 @@ export function readMappedDiagram(source: string): (ReturnType<typeof mapping> &
   switch (lines[header]?.trim()) {
     case 'sequenceDiagram': return readSequence(source, lines, header);
     case 'classDiagram': return readClasses(source, lines, header);
+    case 'stateDiagram':
+    case 'stateDiagram-v2': return readGraphDiagram(source, lines, header, true);
+    case 'erDiagram': return readGraphDiagram(source, lines, header, false);
   }
 }

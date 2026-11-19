@@ -22,14 +22,16 @@ Open a standalone Mermaid file (`.mermaid`) or a Markdown document (`.md`, `.mar
 | --- | --- |
 | Flowchart | Move and resize nodes, edit labels and relationships, and change node styling. |
 | Sequence (partial) | Edit aliases, message labels (`->>` and `-->>`), and single-line notes. Change colors and drag explicit participants, actors, messages, and notes to exact positions. Dragging past another row changes source order; participant reordering requires all participants to be explicitly declared. Control fragments and activations are not supported. |
-| Class (partial) | Edit class labels, existing members, and relationship labels. Move class boxes and change fill, outline, and text colors. Relationship lines, labels, and multiplicities follow class moves; their UML operators and multiplicities are preserved in source. Add classes or change relationship structure in source. |
+| Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes (including `<br>` line breaks). Move class boxes and change fill, outline, and text colors. Relationship lines, labels, and multiplicities follow class moves; their UML operators and multiplicities are preserved in source. Add classes or change relationship structure in source. |
+| State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Supports composite states, concurrent regions, notes, and start/end markers. Create or reorganize regions in source. |
+| Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Add attributes by placing text inside an entity. Supports nested subgraphs; create subgraphs in source. |
 
-Other diagram types and sequence or class blocks with unsupported syntax are shown as read-only source and preserved.
+Other diagram types and blocks with unsupported syntax are shown as read-only source and preserved.
 
 ## Features
 
 - Save canvas layout and arrow routing in Mermaid comments; Mermaid-native styles stay in the source.
-- Reset canvas formatting for flowcharts, sequence diagrams, and class diagrams without undoing content edits or reordering.
+- Reset canvas formatting for supported diagrams without undoing content edits or reordering.
 - Open Markdown files with multiple diagrams in separate tabs while preserving prose and unsupported diagram blocks.
 - Use the standalone web editor offline, or edit the same files in VS Code with live synchronization to the text document.
 
