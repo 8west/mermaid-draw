@@ -1,2 +1,4 @@
 packages:
   - packages/*
+allowBuilds:
+  '@vscode/vsce-sign': false

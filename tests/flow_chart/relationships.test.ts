@@ -1,8 +1,22 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
-  chooseNodeId, getRelationshipSyntax, readFlowchart, removeRelationship, renameNewNode, writeArrow, writeLabel, writePosition, writeRelationship,
+  chooseNodeId, getRelationshipSyntax, readFlowchart, removeRelationship, renameNewNode, resetCanvasFormatting, writeArrow, writeLabel,
+  writePosition, writeRelationship,
 } from '../../packages/mermaid_draw_core/src/flowchart.ts';
+
+test('redraw accepts subgraphs with a local direction', () => {
+  const source = readFileSync(new URL('./subgraph.mermaid', import.meta.url), 'utf8');
+  const diagram = readFlowchart(source);
+  assert.deepEqual([...diagram.subgraphIds], ['D']);
+  assert.equal(diagram.nodeIds.size, 16);
+  assert.ok(diagram.nodeIds.has('A2'));
+  assert.ok(diagram.nodeIds.has('D'));
+  assert.ok(diagram.nodeIds.has('H2'));
+  assert.equal(diagram.source, source);
+  assert.deepEqual([...readFlowchart('flowchart LR\nsubgraph Group title\nA[One]\nend\n').subgraphIds], ['subGraph0']);
+});
 
 test('redraw accepts labeled, bidirectional Mermaid relationships', () => {
   const diagram = readFlowchart('flowchart LR\n    A[Thing A] <-->|works with| B[Thing B]\n');
@@ -23,6 +37,18 @@ test('node appearance overrides round-trip without replacing native fill and str
     x: 10, y: 20, appearance: { fillStyle: 'solid', strokeStyle: 'solid', opacity: 100 },
   });
   assert.doesNotMatch(reset, /"appearance"|hachure|dashed/);
+});
+
+test('resetting canvas formatting removes editor metadata and restores source Mermaid styles', () => {
+  const original = 'flowchart LR\r\n%% Keep this note\r\nstyle A fill:#abc\r\nA[A] --> B[B]\r\n';
+  const edited = 'flowchart LR\r\n%% Keep this note\r\nstyle A fill:#ffc9c9\r\nA[A] --> B[B]\r\n'
+    + '%% layout A {"x":10,"y":20}\r\n%% arrow A B {}\r\n'
+    + '%% excalidraw {"elements":[],"files":{}}\r\nstyle B stroke:#123\r\n';
+  const reset = resetCanvasFormatting(edited, original);
+  assert.equal(reset, 'flowchart LR\r\n%% Keep this note\r\nA[A] --> B[B]\r\nstyle A fill:#abc\r\n');
+  assert.equal(readFlowchart(reset).styles.get('A')?.backgroundColor, '#abc');
+  const metadataOnly = original.replace('A[A] --> B[B]\r\n', 'A[A] --> B[B]\r\n%% layout A {"x":10,"y":20}\r\n');
+  assert.equal(resetCanvasFormatting(metadataOnly, original), original);
 });
 
 test('reversing a relationship moves exact arrowheads with their endpoints', () => {

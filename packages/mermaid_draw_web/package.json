@@ -2,6 +2,9 @@
   "name": "mermaid-draw-web",
   "private": true,
   "type": "module",
+  "exports": {
+    "./canvas": "./src/RenderPrototype.vue"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "vue-tsc --noEmit && vite build"

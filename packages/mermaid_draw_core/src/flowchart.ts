@@ -13,6 +13,7 @@ type ArrowLayout = {
 type NodeStyle = Partial<Pick<ExcalidrawElement, 'strokeColor' | 'backgroundColor' | 'strokeWidth'>>;
 type Diagram = {
   nodeIds: Set<string>;
+  subgraphIds: Set<string>;
   positions: Map<string, Position>;
   arrows: Map<string, ArrowLayout>;
   styles: Map<string, NodeStyle>;
@@ -25,13 +26,32 @@ const edge = new RegExp(String.raw`^(\s*)${endpoint}\s*(<-->|-->|---)(?:\s*\|([^
 const declaration = new RegExp(String.raw`^\s*${endpoint}\s*$`);
 const layout = /^\s*%% layout ([A-Za-z][\w-]*)\s+(.+)$/;
 const arrowLayout = /^\s*%% arrow ([A-Za-z][\w-]*) ([A-Za-z][\w-]*) (.+)$/;
-const styleLine = /^\s*style ([A-Za-z][\w-]*) (.+)$/;
+const styleLine = /^\s*style ([A-Za-z][\w-]*) (.+?)\s*$/;
+const editorFormattingComment = /^\s*%%\s*(?:layout|arrow|excalidraw)(?:\s|$)/;
+const subgraphHeader = /^\s*subgraph\s+(?:([A-Za-z][\w-]*)(?:\s*\[[^\]\r\n]+\])?|[^\[\]\r\n]+)\s*$/;
+const subgraphDirection = /^\s*direction\s+(?:TB|TD|BT|RL|LR)\s*$/;
+const subgraphEnd = /^\s*end\s*$/;
 const color = /^(?:#[\da-f]{3,8}|[a-z]+)$/i;
 const reservedNodeIds = new Set([
   'end', 'graph', 'flowchart', 'subgraph', 'direction', 'style', 'class', 'classdef',
   'linkstyle', 'click', 'call', 'callback', 'href', 'interpolate', 'default', 'acctitle', 'accdescr',
   'lr', 'rl', 'tb', 'td', 'bt',
 ]);
+
+/** Reset editor formatting while retaining Mermaid styles from the loaded source. */
+export function resetCanvasFormatting(source: string, originalSource: string): string {
+  const sourceLines = source.split('\n');
+  const currentStyles = sourceLines.filter((line) => styleLine.test(line));
+  const originalStyles = originalSource.split('\n').filter((line) => styleLine.test(line));
+  const stylesChanged = currentStyles.length !== originalStyles.length
+    || currentStyles.some((line, index) => line !== originalStyles[index]);
+  const lines = sourceLines.filter((line) => !editorFormattingComment.test(line) && !(stylesChanged && styleLine.test(line)));
+  if (stylesChanged) {
+    const insertAt = lines.at(-1) === '' ? lines.length - 1 : lines.length;
+    lines.splice(insertAt, 0, ...originalStyles);
+  }
+  return lines.join('\n');
+}
 
 /** Generate a short Mermaid ID without using the editor's internal element ID. */
 export function chooseNodeId(label: string, usedIds: ReadonlySet<string>): string {
@@ -136,18 +156,20 @@ function isArrowLayout(value: unknown): value is ArrowLayout {
     );
 }
 
-/** Validate the deliberately limited syntax that the prototype can write back safely. */
+/** Validate editable flowchart syntax while preserving supported Mermaid structure. */
 export function readFlowchart(source: string): Diagram {
   const lines = source.split('\n');
   if (!/^flowchart\s+(LR|RL|TB|TD|BT)\s*$/.test(lines[0].trim())) {
     throw new Error('Start with flowchart LR, RL, TB, TD, or BT.');
   }
   const nodeIds = new Set<string>();
+  const subgraphIds = new Set<string>();
   const positions = new Map<string, Position>();
   const arrows = new Map<string, ArrowLayout>();
   const styles = new Map<string, NodeStyle>();
   const edges = new Set<string>();
   const repairs: string[] = [];
+  let anonymousSubgraphIndex = 0;
   for (const [index, line] of lines.entries()) {
     if (index === 0) continue;
     const connection = line.match(edge);
@@ -160,6 +182,12 @@ export function readFlowchart(source: string): Diagram {
       nodeIds.add(start);
       nodeIds.add(end);
     } else {
+      const subgraph = line.match(subgraphHeader);
+      if (subgraph) {
+        const id = subgraph[1] ?? `subGraph${anonymousSubgraphIndex++}`;
+        subgraphIds.add(id);
+        nodeIds.add(id);
+      }
       const node = line.match(declaration);
       if (node?.[2]) nodeIds.add(node[1]);
     }
@@ -217,11 +245,13 @@ export function readFlowchart(source: string): Diagram {
         } else throw new Error(`Unsupported node style at line ${lineNumber}: ${property}.`);
       }
       styles.set(id, values);
+    } else if (subgraphHeader.test(line) || subgraphDirection.test(line) || subgraphEnd.test(line)) {
+      continue;
     } else if (!connection && !node?.[2] && line.trim() && !line.trimStart().startsWith('%%')) {
       throw new Error(`Unsupported syntax at line ${lineNumber}. Use A[Label] or A[Label] --> B[Label].`);
     }
   }
-  return { nodeIds, positions, arrows, styles, source: lines.join('\n'), repairs };
+  return { nodeIds, subgraphIds, positions, arrows, styles, source: lines.join('\n'), repairs };
 }
 
 /** Keep surviving endpoints as standalone nodes when deleting an inline edge. */
@@ -423,6 +453,7 @@ export function normalizeArrowPoints(points: readonly Point[]) {
 /** Restore node bounds and arrow paths without changing Mermaid relationships. */
 export function restorePositions(elements: readonly ExcalidrawElement[], diagram: Diagram): ExcalidrawElement[] {
   const deltas = new Map<string, Position>();
+  const subgraphTitles = new Map([...diagram.subgraphIds].map((id) => [`${id}__title`, id]));
   for (const element of elements) {
     const position = diagram.positions.get(element.id);
     if (position && diagram.nodeIds.has(element.id)) {
@@ -458,6 +489,8 @@ export function restorePositions(elements: readonly ExcalidrawElement[], diagram
     const delta = nodeId && deltas.get(nodeId);
     if (!nodeId) return element;
     const position = diagram.positions.get(nodeId);
+    const subgraphId = subgraphTitles.get(nodeId);
+    const subgraphPosition = subgraphId ? diagram.positions.get(subgraphId) : undefined;
     if (element.type === 'text') {
       const container = elements.find(({ id }) => id === nodeId);
       return {
@@ -467,13 +500,15 @@ export function restorePositions(elements: readonly ExcalidrawElement[], diagram
       };
     }
     return {
-      ...element, ...diagram.styles.get(nodeId), ...position?.appearance,
+      ...element, ...diagram.styles.get(nodeId), ...(position?.appearance ?? subgraphPosition?.appearance),
       width: position?.width ?? element.width,
       height: position?.height ?? element.height,
       x: position?.x ?? element.x,
       y: position?.y ?? element.y,
-      roundness: position?.roundness === undefined ? element.roundness : position.roundness,
-      roughness: position?.roughness ?? ARCHITECT_ROUGHNESS,
+      roundness: position?.roundness === undefined
+        ? subgraphPosition?.roundness === undefined ? element.roundness : subgraphPosition.roundness
+        : position.roundness,
+      roughness: position?.roughness ?? subgraphPosition?.roughness ?? ARCHITECT_ROUGHNESS,
     };
   });
 }

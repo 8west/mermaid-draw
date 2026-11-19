@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
-import type { AppState, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
+import type { AppState, BinaryFiles, ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types';
 import '@excalidraw/excalidraw/index.css';
 import { parseMermaidToExcalidraw } from '@excalidraw/mermaid-to-excalidraw';
 import { createElement } from 'react';
@@ -13,7 +13,11 @@ import {
   removeRelationship, renameNewNode, restorePositions, writeArrow, writeLabel, writeNodeStyle, writePosition, writeRelationship,
 } from '@mermaid-draw/core/flowchart';
 
-const props = defineProps<{ initialSource: string; active: boolean; layoutSignal: string }>();
+/**
+ * `initialSource` seeds the canvas. A later value that differs from the canvas's current source is applied
+ * in place, keeping the viewport. `theme` defaults to light.
+ */
+const props = defineProps<{ initialSource: string; active: boolean; layoutSignal: string; theme?: 'light' | 'dark' }>();
 const emit = defineEmits<{ state: [state: { source: string; busy: boolean; status: string; error: string }] }>();
 const canvasHost = ref<HTMLDivElement | null>(null);
 const applied = ref(props.initialSource);
@@ -21,7 +25,9 @@ const busy = ref(true);
 const status = ref('Loading Mermaid...');
 const error = ref('');
 const canvasError = ref('');
-watch([applied, busy, status, error, canvasError], ([source, working, message, sourceFailure, canvasFailure]) => {
+// Bumped after every apply so callers hear about it even when no other state changed.
+const applyCount = ref(0);
+watch([applied, busy, status, error, canvasError, applyCount], ([source, working, message, sourceFailure, canvasFailure]) => {
   emit('state', { source, busy: working, status: message, error: sourceFailure || canvasFailure });
 }, { immediate: true });
 function nodeSnapshot(element: ExcalidrawElement) {
@@ -32,6 +38,8 @@ function nodeSnapshot(element: ExcalidrawElement) {
 
 let nodes = new Map<string, ReturnType<typeof nodeSnapshot>>();
 let nodeIds = new Map<string, string>();
+let subgraphTitleOwners = new Map<string, string>();
+let subgraphTitleNodes = new Map<string, ReturnType<typeof nodeSnapshot>>();
 const unnamedNodes = new Set<string>();
 let labels = new Map<string, string>();
 let edgeEndpoints = new Map<string, {
@@ -52,7 +60,10 @@ watch([() => props.active, () => props.layoutSignal, error, canvasError], () => 
   if (props.active && !error.value) api?.refresh();
 }, { flush: 'post' });
 
+let applyRun = 0;
+
 async function applySource() {
+  const run = ++applyRun;
   busy.value = true;
   canvasError.value = '';
   const input = props.initialSource;
@@ -60,7 +71,7 @@ async function applySource() {
     const extras = readCanvasExtras(input);
     const diagram = readFlowchart(input);
     const parsed = diagram.nodeIds.size ? await parseMermaidToExcalidraw(extras.mermaid) : undefined;
-    if (!canvasHost.value) return;
+    if (!canvasHost.value || run !== applyRun) return;
     const converted = parsed ? convertToExcalidrawElements(parsed.elements, { regenerateIds: false }) : [];
     let scene = restorePositions(converted, diagram);
     const next = new Map(scene.filter(({ id }) => diagram.nodeIds.has(id)).map((element) => [element.id, nodeSnapshot(element)]));
@@ -84,10 +95,21 @@ async function applySource() {
       return bindings ? { ...element, boundElements: [...(element.boundElements ?? []), ...bindings] } : element;
     }).concat(extras.elements);
     const sceneFiles = { ...parsed?.files, ...extras.files };
+    // A source update can arrive before the first scene has mounted.
+    const mounted = editor ? await canvasApi : undefined;
+    if (run !== applyRun) return;
 
     // Install the new baseline before updateScene can notify onChange.
     nodes = next;
     nodeIds = new Map([...nodes.keys()].map((id) => [id, id]));
+    // The converter emits each subgraph heading as a separate `${id}__title` shape.
+    subgraphTitleOwners = new Map([...diagram.subgraphIds].map((id) => [`${id}__title`, id]));
+    subgraphTitleNodes = new Map();
+    for (const element of scene) {
+      if (element.type === 'rectangle' && subgraphTitleOwners.has(element.id)) {
+        subgraphTitleNodes.set(element.id, nodeSnapshot(element));
+      }
+    }
     unnamedNodes.clear();
     canvasExtrasBaseline = writeCanvasExtras('', extras.elements, extras.files);
     labels = new Map(scene.flatMap((element) =>
@@ -110,32 +132,56 @@ async function applySource() {
         snapshot: JSON.stringify(getArrowLayout(arrow, start, end)),
       });
     }
-    if (api) {
-      if (Object.keys(sceneFiles).length) api.addFiles(Object.values(sceneFiles));
-      api.updateScene({ elements: scene, captureUpdate: CaptureUpdateAction.NEVER });
+    if (mounted) {
+      if (Object.keys(sceneFiles).length) mounted.addFiles(Object.values(sceneFiles));
+      mounted.updateScene({ elements: scene, captureUpdate: CaptureUpdateAction.NEVER });
     } else {
       editor = createRoot(canvasHost.value);
-      editor.render(createElement(Excalidraw, {
-        initialData: {
-          elements: scene, files: sceneFiles, scrollToContent: true,
-          appState: { currentItemRoughness: ARCHITECT_ROUGHNESS },
-        },
-        validateEmbeddable: false,
-        excalidrawAPI: (instance) => { api = instance; },
-        onChange: syncCanvas,
-      }));
+      renderEditor({
+        elements: scene, files: sceneFiles, scrollToContent: true,
+        appState: { currentItemRoughness: ARCHITECT_ROUGHNESS },
+      });
     }
     error.value = '';
     await nextTick();
-    if (scene.length) api?.scrollToContent(scene);
+    if (run !== applyRun) return;
+    // Later applies come from source edits; keep the user's viewport.
+    if (!mounted && scene.length) api?.scrollToContent(scene);
     applied.value = diagram.source;
     status.value = `Source applied. ${nodes.size} nodes.${diagram.repairs.length ? ` Repaired metadata: ${diagram.repairs.join('; ')}.` : ''}`;
   } catch (failure) {
-    error.value = failure instanceof Error ? failure.message : String(failure);
+    if (run === applyRun) error.value = failure instanceof Error ? failure.message : String(failure);
   } finally {
-    busy.value = false;
+    if (run === applyRun) {
+      busy.value = false;
+      applyCount.value++;
+    }
   }
 }
+
+let initialData: ExcalidrawInitialDataState | undefined;
+let resolveApi: (instance: ExcalidrawImperativeAPI) => void;
+const canvasApi = new Promise<ExcalidrawImperativeAPI>((resolve) => { resolveApi = resolve; });
+
+function renderEditor(data?: ExcalidrawInitialDataState) {
+  initialData ??= data;
+  editor?.render(createElement(Excalidraw, {
+    initialData,
+    theme: props.theme ?? 'light',
+    validateEmbeddable: false,
+    excalidrawAPI: (instance) => {
+      api = instance;
+      resolveApi(instance);
+    },
+    onChange: syncCanvas,
+  }));
+}
+
+watch(() => props.theme, () => renderEditor());
+watch(() => props.initialSource, (source) => {
+  // Re-apply even an unchanged source to clear an error or supersede an apply still in progress.
+  if (source !== applied.value || error.value || canvasError.value || busy.value) void applySource();
+});
 
 function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, files: BinaryFiles) {
   if (busy.value || error.value || state.isLoading || state.selectedElementsAreBeingDragged
@@ -174,6 +220,35 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
       nodes.set(id, snapshot);
     }
   }
+  for (const [titleId, subgraphId] of subgraphTitleOwners) {
+    const before = subgraphTitleNodes.get(titleId);
+    const after = live.get(titleId);
+    if (!before || after?.type !== 'rectangle') continue;
+    const snapshot = nodeSnapshot(after);
+    const frame = live.get(subgraphId);
+    const base = frame?.type === 'rectangle' ? nodeSnapshot(frame) : nodes.get(subgraphId);
+    if (!base) continue;
+
+    if (before.strokeColor !== snapshot.strokeColor || before.backgroundColor !== snapshot.backgroundColor
+      || before.strokeWidth !== snapshot.strokeWidth) {
+      updated = writeNodeStyle(updated, subgraphId, {
+        strokeColor: before.strokeColor !== snapshot.strokeColor ? snapshot.strokeColor : base.strokeColor,
+        backgroundColor: before.backgroundColor !== snapshot.backgroundColor ? snapshot.backgroundColor : base.backgroundColor,
+        strokeWidth: before.strokeWidth !== snapshot.strokeWidth ? snapshot.strokeWidth : base.strokeWidth,
+      });
+      styleWritten = true;
+    }
+    const appearanceChanged = before.appearance?.fillStyle !== snapshot.appearance?.fillStyle
+      || before.appearance?.strokeStyle !== snapshot.appearance?.strokeStyle
+      || before.appearance?.opacity !== snapshot.appearance?.opacity;
+    if (appearanceChanged || before.roundness?.type !== snapshot.roundness?.type || before.roughness !== snapshot.roughness) {
+      updated = writePosition(updated, subgraphId, {
+        ...base, appearance: snapshot.appearance, roundness: snapshot.roundness, roughness: snapshot.roughness,
+      });
+      geometryWritten = true;
+    }
+    subgraphTitleNodes.set(titleId, snapshot);
+  }
   if (deleted.size) updated = removeNodes(updated, deleted);
   if (!state.editingTextElement) {
     const boundLabels = new Map([...live.values()].flatMap((element) =>
@@ -182,7 +257,7 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
     const usedIds = new Set([...live.keys(), ...nodeIds.values()]);
     for (const element of live.values()) {
       if (element.type !== 'rectangle' || nodes.has(element.id) || element.width <= 0 || element.height <= 0
-        || element.angle || element.frameId || element.groupIds.length) continue;
+        || element.angle || element.frameId || element.groupIds.length || subgraphTitleOwners.has(element.id)) continue;
       const drawnLabel = boundLabels.get(element.id);
       const label = drawnLabel ?? 'Node';
       if (!isSimpleLabel(label)) continue;
@@ -264,6 +339,8 @@ function syncCanvas(elements: readonly ExcalidrawElement[], state: AppState, fil
   }
   const deletedElements = new Set([...removedEdges, ...elements.filter(({ isDeleted }) => isDeleted).map(({ id }) => id)]);
   const extras = [...live.values()].filter((element) => !nodes.has(element.id) && !edgeEndpoints.has(element.id)
+    && !subgraphTitleOwners.has(element.id)
+    && !(element.type === 'text' && element.containerId && subgraphTitleOwners.has(element.containerId))
     && !(element.type === 'text' && element.containerId
       && (nodes.has(element.containerId) || edgeEndpoints.has(element.containerId))));
   const remappedExtras = extras.map((element) => remapCanvasReferences(element, nodeIds, deletedElements));

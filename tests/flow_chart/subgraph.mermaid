@@ -1,0 +1,36 @@
+flowchart TB
+    A[Root]
+    B[Branch 1]
+    C[Branch 2]
+    D[D]
+    E[Leaf 2]
+    F[Leaf 3]
+    G[Leaf 4]
+    H[Leaf 5]
+    subgraph D [Leaf 1]
+        direction TD
+        B2[Branch 1]
+        A2[Root]
+        C2[Branch 2]
+        D2[Leaf 1]
+        E2[Leaf 2]
+        F2[Leaf 3]
+        G2[Leaf 4]
+        H2[Leaf 5]
+    end
+    A --> B
+    A --> C
+    B --> D
+    B --> E
+    C --> F
+    C --> G
+    C --> H
+    F <-->|hhhh| G
+    A2 --> B2
+    A2 --> C2
+    B2 --> D2
+    B2 --> E2
+    C2 --> F2
+    C2 --> G2
+    C2 --> H2
+    F2 <--> G2

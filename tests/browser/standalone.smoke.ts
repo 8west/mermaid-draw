@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 const dist = new URL('../../packages/mermaid_draw_web/dist/', import.meta.url);
 const entry = new URL('index.html', dist);
 const standalone = new URL('../flow_chart/flow_chart1.mermaid', import.meta.url);
+const subgraph = new URL('../flow_chart/subgraph.mermaid', import.meta.url);
 const markdown = new URL('../markdown/three-flowcharts.md', import.meta.url);
 
 test('the standalone build edits and downloads local files offline', { timeout: 45_000 }, async () => {
@@ -60,6 +61,48 @@ test('the standalone build edits and downloads local files offline', { timeout: 
     await deleteCenteredArrow();
     await tab('SOURCE').click();
     assert.doesNotMatch(await source.inputValue(), /-->/);
+
+    await upload.setInputFiles(fileURLToPath(subgraph));
+    await page.getByRole('heading', { name: 'subgraph.mermaid', exact: true }).waitFor();
+    await page.waitForFunction(() =>
+      !!document.querySelector('.diagram-panel .excalidraw') || !!document.querySelector('.diagram-error'));
+    assert.deepEqual(await page.locator('.diagram-error').allTextContents(), [], 'Subgraph should render without errors.');
+    assert.equal(await download('subgraph.mermaid'), await readFile(subgraph, 'utf8'));
+    await page.mouse.click(640, 506);
+    await page.getByTestId('color-top-pick-#ffc9c9').click();
+    await tab('SOURCE').click();
+    const styledSource = await source.inputValue();
+    assert.match(styledSource, /style D .*fill:#ffc9c9/,
+      'subgraph title fill should be saved as a subgraph style');
+    assert.equal((await download('subgraph.mermaid')).replace(/\r\n/g, '\n'), styledSource);
+    await tab('Diagram 1').click();
+    await page.mouse.click(640, 506);
+    await page.getByTestId('opacity').focus();
+    await page.keyboard.press('ArrowLeft');
+    await tab('SOURCE').click();
+    const opacitySource = await source.inputValue();
+    assert.match(opacitySource, /layout D .*"appearance":\{"opacity":90\}/,
+      'subgraph title opacity should be saved in layout metadata');
+    assert.equal((await download('subgraph.mermaid')).replace(/\r\n/g, '\n'), opacitySource);
+    await tab('Diagram 1').click();
+    const resetStyles = button('Reset styles');
+    await resetStyles.click();
+    await tab('SOURCE').click();
+    const resetSource = await source.inputValue();
+    assert.doesNotMatch(resetSource, /%% (?:layout|arrow|excalidraw)\b/,
+      'reset should remove editor formatting comments');
+    assert.doesNotMatch(resetSource, /style D\b/,
+      'reset should restore generic styling when the original source had no style directive');
+
+    const implicitSubgraph = 'flowchart LR\nsubgraph Group title\nA[One]\nB[Two]\nend\nA --> B\n';
+    await upload.setInputFiles({
+      name: 'implicit-subgraph.mermaid', mimeType: 'text/plain', buffer: Buffer.from(implicitSubgraph),
+    });
+    await page.getByRole('heading', { name: 'implicit-subgraph.mermaid', exact: true }).waitFor();
+    await page.waitForFunction(() =>
+      !!document.querySelector('.diagram-panel .excalidraw') || !!document.querySelector('.diagram-error'));
+    assert.deepEqual(await page.locator('.diagram-error').allTextContents(), [], 'Implicit subgraph should render without errors.');
+    assert.equal(await download('implicit-subgraph.mermaid'), implicitSubgraph);
 
     await upload.setInputFiles(fileURLToPath(markdown));
     await tab('Receive the order').waitFor();

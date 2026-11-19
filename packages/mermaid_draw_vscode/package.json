@@ -1,0 +1,103 @@
+{
+  "name": "mermaid-draw-vscode",
+  "displayName": "MermaidDraw",
+  "description": "Edit Mermaid flowcharts in Markdown and Mermaid files on an Excalidraw canvas.",
+  "icon": "media/icon.png",
+  "version": "0.1.0",
+  "publisher": "mermaid-draw",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "Mermaid",
+    "Excalidraw",
+    "Diagram",
+    "Flowchart"
+  ],
+  "main": "./dist/extension/extension.cjs",
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "mermaidDraw.editor",
+        "displayName": "Diagram Canvas",
+        "selector": [
+          { "filenamePattern": "*.md" },
+          { "filenamePattern": "*.markdown" },
+          { "filenamePattern": "*.mermaid" }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mermaidDraw.openEditor",
+        "title": "Open in MermaidDraw",
+        "category": "MermaidDraw",
+        "icon": "media/icon.svg"
+      },
+      {
+        "command": "mermaidDraw.openSource",
+        "title": "Open Source Text",
+        "category": "MermaidDraw",
+        "icon": "$(go-to-file)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "mermaidDraw.openEditor",
+          "when": "resourceScheme != untitled && resourceExtname =~ /^\\.(md|markdown|mermaid)$/i && activeCustomEditorId != mermaidDraw.editor",
+          "group": "navigation"
+        },
+        {
+          "command": "mermaidDraw.openSource",
+          "when": "activeCustomEditorId == mermaidDraw.editor",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "mermaidDraw.openEditor",
+          "when": "resourceExtname =~ /^\\.(md|markdown|mermaid)$/i",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mermaidDraw.openEditor",
+          "when": "resourceExtname =~ /^\\.(md|markdown|mermaid)$/i"
+        },
+        {
+          "command": "mermaidDraw.openSource",
+          "when": "activeCustomEditorId == mermaidDraw.editor"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build && vite build -c vite.extension.config.ts",
+    "package": "pnpm build && vsce package --no-dependencies --skip-license --allow-missing-repository -o dist/mermaid-draw.vsix"
+  },
+  "dependencies": {
+    "@mermaid-draw/core": "workspace:*",
+    "mermaid-draw-web": "workspace:*",
+    "vue": "3.5.45"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/vscode": "1.100.0",
+    "@vitejs/plugin-vue": "6.0.11",
+    "@vscode/vsce": "4.1.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.8",
+    "vue-tsc": "3.3.14"
+  }
+}

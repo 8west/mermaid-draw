@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, shallowRef, watch } from 'vue';
 import { openDocument } from '@mermaid-draw/core/document';
+import { resetCanvasFormatting } from '@mermaid-draw/core/flowchart';
 import mermaidIcon from './assets/mermaid-pencil.svg';
 import RenderPrototype from './RenderPrototype.vue';
 
@@ -24,6 +25,15 @@ const sourceText = computed(() => current.value.save(new Map(slots.value.flatMap
 }))));
 const editorText = computed(() => (draft.value ?? sourceText.value).replace(/\r\n?/g, '\n'));
 const dirty = computed(() => editorText.value !== sourceText.value.replace(/\r\n?/g, '\n'));
+const activeSlot = computed(() => slots.value.find(({ key }) => key === selected.value));
+const canResetStyles = computed(() => {
+  const slot = activeSlot.value;
+  if (!slot?.diagram.editable || loading.value || dirty.value) return false;
+  const state = states.get(slot.key);
+  if (state?.busy || state?.error) return false;
+  const source = state?.source ?? slot.diagram.source;
+  return resetCanvasFormatting(source, slot.diagram.source) !== source;
+});
 const failures = computed(() => slots.value.flatMap(({ key, diagram }) => {
   const error = states.get(key)?.error;
   return error ? [{ key, title: diagram.title, error }] : [];
@@ -93,6 +103,19 @@ function applySource() {
 function restoreSource() {
   if (recoverableSource.value === null) return;
   install(openDocument(current.value.name, recoverableSource.value), true);
+}
+
+function resetStyles() {
+  const slot = activeSlot.value;
+  if (!slot || !canResetStyles.value) return;
+  const edits = new Map<number, string>(slots.value.map(({ key, diagram }) =>
+    [diagram.id, states.get(key)?.source ?? diagram.source],
+  ));
+  const source = edits.get(slot.diagram.id) ?? slot.diagram.source;
+  edits.set(slot.diagram.id, resetCanvasFormatting(source, slot.diagram.source));
+  const diagramId = slot.diagram.id;
+  install(openDocument(current.value.name, current.value.save(edits)), true);
+  selected.value = slots.value.find(({ diagram }) => diagram.id === diagramId)?.key ?? 0;
 }
 
 function selectTab(key: number) {
@@ -179,6 +202,9 @@ function download() {
               :aria-controls="`editor-panel-${key}`" @click="selectTab(key)" @keydown="moveTab($event, key)"
             >{{ diagram.title }}</button>
           </div>
+          <button v-if="activeSlot?.diagram.editable" type="button" class="action secondary reset-styles"
+            :disabled="!canResetStyles" @click="resetStyles"
+          >Reset styles</button>
           <button type="button" class="diagnostics-toggle" aria-label="Diagnostics" title="Diagnostics"
             :aria-expanded="diagnosticsOpen" aria-controls="editor-diagnostics" @click="diagnosticsOpen = !diagnosticsOpen"
           >
@@ -303,6 +329,7 @@ main { display: flex; flex-direction: column; min-inline-size: 0; gap: 0.3rem; p
 .tabs .source-tab[aria-selected="true"] { background: var(--ink); color: white; box-shadow: inset 0 2px var(--accent); }
 .source-tab span { font-family: ui-monospace, monospace; }
 .diagnostics-toggle { display: grid; place-items: center; flex: none; inline-size: 2rem; block-size: 2rem; margin: 0.35rem; padding: 0; border: 1px solid var(--border); border-radius: 0.4rem; background: var(--surface); color: var(--muted); cursor: pointer; }
+.reset-styles { flex: none; margin: 0.35rem 0.15rem; }
 .diagnostics-toggle:hover, .diagnostics-toggle[aria-expanded="true"] { background: var(--neutral-strong); color: var(--ink); }
 .diagnostics-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .diagnostics { order: -1; box-sizing: border-box; max-block-size: 28dvh; overflow: auto; padding: 0.6rem 0.8rem; border-block-end: 1px solid var(--border); background: var(--surface); font-size: 0.85rem; overflow-wrap: anywhere; }
@@ -325,5 +352,10 @@ main { display: flex; flex-direction: column; min-inline-size: 0; gap: 0.3rem; p
 @media (max-width: 22rem) {
   .document-controls .file-actions { gap: 0.25rem; }
   .masthead .action { gap: 0.2rem; }
+}
+
+/** Hide specific Excalidraw buttons */
+[title="X"], [title="Reset the canvas"], [title="Open"] {
+    display: none !important;
 }
 </style>
