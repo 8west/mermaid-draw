@@ -32,6 +32,11 @@ Web pages use the latest stable Vue and run entirely in the browser, with no bac
 - The scope of graph edits beyond moves, supported styling, and deletes depends on the identity and source-editing contract.
 - VS Code launch affordances and save behavior during invalid or concurrent edits depend on the shared core and the website proof.
 
+## Current editable scope
+
+- Mermaid flowcharts are currently the only diagram type editable on the canvas. Other diagram types are read-only and preserved.
+- Candidate types and their value and Excalidraw fit are assessed in the [diagram type support plan](./diagram-type-support-plan.md).
+
 ## Future features
 
 - **VS Code toolkit: MermaidDraw agent skill.** Bundle a skill that explains MermaidDraw's `%%` metadata comments and guides agents through intentional node ID renames. Update references within the affected diagram, including relationship endpoints, style targets, node and arrow layout comments, and canvas-only bindings where applicable. Preserve labels and unrelated comments, and validate for stale references. This is agent guidance, not a change to the editor's [automatic repair rules](./issues/03-define-round-trip-editing.md).

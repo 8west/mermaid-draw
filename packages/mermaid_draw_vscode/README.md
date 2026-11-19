@@ -8,7 +8,7 @@ Edit Mermaid flowcharts on an Excalidraw canvas without leaving the editor.
 - A `.mermaid` file shows one canvas. A Markdown file shows a tab per Mermaid diagram.
 - Canvas edits update the text document immediately; save, undo, and redo work as usual. Edits to the text, from any editor, redraw the canvas.
 - **MermaidDraw: Open Source Text** opens the text beside the canvas.
-- Non-flowchart diagrams are shown read-only. Invalid Mermaid is reported and left untouched until fixed.
+- Flowchart is currently the only Mermaid diagram type editable on the canvas. Other diagram types are shown read-only and preserved. Invalid Mermaid is reported and left untouched until fixed.
 
 ## Develop
 

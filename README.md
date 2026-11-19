@@ -14,6 +14,8 @@
 
 MermaidDraw pairs an Excalidraw canvas with editable Mermaid source. It runs entirely in your browser: no account, backend, or file uploads.
 
+**Current editable type:** Mermaid flowcharts only. Other Mermaid diagram types can be preserved in Markdown, but are read-only.
+
 ## Features
 
 - Visually edit Mermaid flowcharts: move and resize nodes, update labels and relationships, and change node styling.

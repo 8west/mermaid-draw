@@ -8,6 +8,8 @@ MermaidDraw uses a pnpm workspace. The website and the VS Code extension are sep
 | [`mermaid_draw_web`](../packages/mermaid_draw_web) | Vue website. Owns file opening and downloading, document tabs, source editing, and the live Excalidraw canvas. Its Vite build produces the standalone HTML. |
 | [`mermaid_draw_vscode`](../packages/mermaid_draw_vscode) | VS Code extension. A custom text editor opens `.md`, `.markdown`, and `.mermaid` files in a webview that reuses the web canvas; the VS Code text document stays the source of truth. |
 
+Flowcharts are currently the only Mermaid diagram type editable on the canvas. Other types are read-only and preserved.
+
 ## Where to make changes
 
 - **Markdown import and export:** [`diagramDocument.ts`](../packages/mermaid_draw_core/src/diagramDocument.ts) identifies diagram blocks and replaces edited bodies without rewriting the surrounding Markdown.
