@@ -3,6 +3,7 @@
   "displayName": "MermaidDraw",
   "description": "Edit Mermaid diagrams in Markdown and Mermaid files on an Excalidraw canvas.",
   "icon": "media/icon.png",
+  "author": { "name": "Russ Painter", "email": "rpainter@8west.ie" },
   "version": "0.1.1",
   "publisher": "mermaid-draw",
   "private": true,
@@ -14,7 +15,7 @@
   },
   "type": "module",
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.146.0"
   },
   "categories": [
     "Visualization",
@@ -98,7 +99,7 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "@types/vscode": "1.100.0",
+    "@types/vscode": "1.146.0",
     "@vitejs/plugin-vue": "6.0.11",
     "@vscode/vsce": "4.1.1",
     "typescript": "5.9.3",
