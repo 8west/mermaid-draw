@@ -12,7 +12,7 @@ Start from [Check upstream Excalidraw and converter extension points](./01-check
 
 ## Comments
 
-The [rendering POC](../../../packages/mermaid_draw_web/src/RenderPrototype.vue) runs with `pnpm poc` from the repo root. Open [localhost:5173](http://127.0.0.1:5173/) in the VS Code integrated browser. Verified that the stock packages render [flow_chart1.mermaid](../../../tests/flow_chart/flow_chart1.mermaid) as two labeled nodes and an arrow. This proves initial rendering in Vue, not identity through updates, reverse writes, or feedback-loop handling.
+The [rendering POC](../../../packages/mermaid_draw_web/src/RenderPrototype.vue) runs with `pnpm poc` from the repo root. Open [localhost:5173](http://127.0.0.1:5173/) in the VS Code integrated browser. Verified that the stock packages render the [labeled nodes example](../../../tests/diagrams/flowchart.md#labeled-nodes) as two labeled nodes and an arrow. This proves initial rendering in Vue, not identity through updates, reverse writes, or feedback-loop handling.
 
 The round-trip POC now writes node moves as `%% layout ID X Y` comments, saves single-line canvas label edits to the corresponding Mermaid node, and removes incident edges and layout metadata on node deletion. Use **Apply Mermaid** to replace the scene from text or **Download Mermaid** to save the applied source locally without modifying the fixture. The VS Code browser check covered label write-back and the download payload, one layout comment per moved node, deletion in both directions, and rejection of invalid source without replacing the scene. The tested source update did not echo back. This remains a simple-flowchart spike; undo across source and canvas, richer syntax, and the final layout format are not settled.
 

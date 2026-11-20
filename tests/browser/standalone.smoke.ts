@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { openDocument } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
+import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 
 const dist = new URL('../../packages/mermaid_draw_web/dist/', import.meta.url);
 const entry = new URL('index.html', dist);
-const standalone = new URL('../diagrams/flow_chart/flow_chart1.mermaid', import.meta.url);
-const subgraph = new URL('../diagrams/flow_chart/subgraph.mermaid', import.meta.url);
-const markdown = new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url);
+const markdown = examplePath('flowchart');
 
 test('the standalone build edits and downloads local files offline', { timeout: 45_000 }, async () => {
   assert.deepEqual(await readdir(dist), ['index.html']);
@@ -33,6 +32,15 @@ test('the standalone build edits and downloads local files offline', { timeout: 
     const canvas = () => panel.locator('.excalidraw');
     const source = page.getByRole('textbox', { name: 'Document source' });
     const upload = page.getByLabel('Open Markdown or Mermaid file');
+    const original = await readFile(markdown, 'utf8');
+    const examples = openDocument(markdown, original);
+
+    async function openStandalone(title: string, name: string) {
+      const { source } = exampleNamed(examples, title);
+      await upload.setInputFiles({ name, mimeType: 'text/plain', buffer: Buffer.from(source) });
+      await page.getByRole('heading', { name, exact: true }).waitFor();
+      return source;
+    }
 
     async function download(name: string) {
       const [file] = await Promise.all([page.waitForEvent('download'), button('Download').click()]);
@@ -55,19 +63,17 @@ test('the standalone build edits and downloads local files offline', { timeout: 
       (font) => font.family === 'Excalifont' && font.status === 'loaded',
     )), 'the canvas font is available offline');
 
-    await upload.setInputFiles(fileURLToPath(standalone));
-    await page.getByRole('heading', { name: 'flow_chart1.mermaid', exact: true }).waitFor();
-    assert.equal(await download('flow_chart1.mermaid'), await readFile(standalone, 'utf8'));
+    const standalone = await openStandalone('Labeled nodes', 'nodes.mermaid');
+    assert.equal(await download('nodes.mermaid'), standalone);
     await deleteCenteredArrow();
     await tab('SOURCE').click();
     assert.doesNotMatch(await source.inputValue(), /-->/);
 
-    await upload.setInputFiles(fileURLToPath(subgraph));
-    await page.getByRole('heading', { name: 'subgraph.mermaid', exact: true }).waitFor();
+    const subgraph = await openStandalone('Subgraph direction', 'subgraph.mermaid');
     await page.waitForFunction(() =>
       !!document.querySelector('.diagram-panel .excalidraw') || !!document.querySelector('.diagram-error'));
     assert.deepEqual(await page.locator('.diagram-error').allTextContents(), [], 'Subgraph should render without errors.');
-    assert.equal(await download('subgraph.mermaid'), await readFile(subgraph, 'utf8'));
+    assert.equal(await download('subgraph.mermaid'), subgraph);
     await page.mouse.click(640, 506);
     await page.getByTestId('color-top-pick-#ffc9c9').click();
     await tab('SOURCE').click();
@@ -94,29 +100,24 @@ test('the standalone build edits and downloads local files offline', { timeout: 
     assert.doesNotMatch(resetSource, /style D\b/,
       'reset should restore generic styling when the original source had no style directive');
 
-    const implicitSubgraph = 'flowchart LR\nsubgraph Group title\nA[One]\nB[Two]\nend\nA --> B\n';
-    await upload.setInputFiles({
-      name: 'implicit-subgraph.mermaid', mimeType: 'text/plain', buffer: Buffer.from(implicitSubgraph),
-    });
-    await page.getByRole('heading', { name: 'implicit-subgraph.mermaid', exact: true }).waitFor();
+    const implicitSubgraph = await openStandalone('Implicit subgraph ID', 'implicit-subgraph.mermaid');
     await page.waitForFunction(() =>
       !!document.querySelector('.diagram-panel .excalidraw') || !!document.querySelector('.diagram-error'));
     assert.deepEqual(await page.locator('.diagram-error').allTextContents(), [], 'Implicit subgraph should render without errors.');
     assert.equal(await download('implicit-subgraph.mermaid'), implicitSubgraph);
 
-    await upload.setInputFiles(fileURLToPath(markdown));
-    await tab('Receive the order').waitFor();
+    await upload.setInputFiles(markdown);
+    await tab('Receive the order').click();
     await button('Download').click({ trial: true });
     await deleteCenteredArrow();
     await tab('Ship the package').click();
     await deleteCenteredArrow();
 
-    const original = await readFile(markdown, 'utf8');
     const eol = original.includes('\r\n') ? '\r\n' : '\n';
     const expected = original
       .replace('Start[Order received] --> Done[Order confirmed]', `Start[Order received]${eol}    Done[Order confirmed]`)
       .replace('Start[Carrier pickup] --> Done[Notify customer]', `Start[Carrier pickup]${eol}    Done[Notify customer]`);
-    assert.equal(await download('three-flowcharts.md'), expected);
+    assert.equal(await download('flowchart.md'), expected);
 
     await tab('SOURCE').click();
     await source.fill((await source.inputValue()).replace('Start[Order received]', 'Start[Order received] -->'));
@@ -129,7 +130,7 @@ test('the standalone build edits and downloads local files offline', { timeout: 
     await button('Restore last valid source').click();
     await tab('Receive the order').click();
     await canvas().waitFor();
-    assert.equal(await download('three-flowcharts.md'), expected);
+    assert.equal(await download('flowchart.md'), expected);
     assert.deepEqual(networkRequests, [], 'the standalone page must not request additional resources');
     assert.deepEqual(errors, [], 'the page must run without browser errors');
   } finally {

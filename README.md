@@ -25,8 +25,13 @@ Open a standalone Mermaid file (`.mermaid`) or a Markdown document (`.md`, `.mar
 | Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes (including `<br>` line breaks). Move class boxes and change fill, outline, and text colors. Relationship lines, labels, and multiplicities follow class moves; their UML operators and multiplicities are preserved in source. Add classes or change relationship structure in source. |
 | State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Supports composite states, concurrent regions, notes, and start/end markers. Create or reorganize regions in source. |
 | Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Add attributes by placing text inside an entity. Supports nested subgraphs; create subgraphs in source. |
+| Requirement (partial) | Edit requirement and element fields, move and color boxes, and edit or reconnect all seven relationship types. Draw a rectangle to add a requirement; new arrows default to `traces`. Rename declarations, change their kind, or create elements in source. |
 
-For supported class, sequence, state, and entity relationship connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments. These visual overrides do not change relationship or message semantics.
+For supported class, sequence, state, entity relationship, and requirement connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments. These visual overrides do not change relationship or message semantics.
+
+In state, entity relationship, and requirement diagrams, drag a connector's middle handle to add a bend. Bends are saved with the relationship and survive download and reopen. **Reset styles** restores automatic routing without changing the relationship.
+
+Requirement connectors also support **Sharp**, **Curved**, and **Elbow**. Curved rounds an existing bend; a two-point connector is still straight. Elbow routes in right angles. Neither changes the Mermaid relationship type.
 
 Class notes support repeated moves, fill/stroke/text colors, fill pattern, stroke width/pattern, roughness, opacity, rounded corners, and font/alignment controls. Note formatting is stored in an adjacent `%% class-note` comment; reset preserves note text and class attachment. Resizing, rotation, note creation/deletion, and layer changes are not supported canvas operations.
 
@@ -65,6 +70,11 @@ If Vite reports that a new workspace package export is missing, stop and restart
 If port 5173 is already in use, stop the existing dev server or run `pnpm dev:web --port 5174` and open <http://127.0.0.1:5174/>.
 
 ## Test and build
+
+Open the test document for the diagram type you want to check:
+[flowchart](tests/diagrams/flowchart.md), [sequence](tests/diagrams/sequence.md), [class](tests/diagrams/class.md), [state](tests/diagrams/state.md), [entity relationship](tests/diagrams/entity-relationship.md), or [requirement](tests/diagrams/requirement.md).
+
+The first diagram matches the linked Mermaid documentation. Each feature heading becomes a tab; later tabs cover other official examples or project-specific editing cases. The unit tests open every block, and the browser tests use these same documents for edits, downloads, and reopening.
 
 ```sh
 pnpm test

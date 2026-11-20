@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
 import { openDocument } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
 import { readMappedDiagram } from '../../packages/mermaid_draw_core/src/mappedDiagram.ts';
+import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 
 test('class connectors follow a drag, colors persist, and Reset styles clears formatting', { timeout: 20_000 }, async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
-    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(fileURLToPath(
-      new URL('../diagrams/class/class-mapping.md', import.meta.url),
-    ));
+    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(examplePath('class'));
+    const featureTab = page.getByRole('tab', { name: 'Composition and members', exact: true });
+    await featureTab.click();
     const canvas = page.getByRole('tabpanel').locator('.excalidraw');
     await canvas.waitFor();
     const view = await canvas.boundingBox();
@@ -43,13 +43,13 @@ test('class connectors follow a drag, colors persist, and Reset styles clears fo
     assert.match(await source.inputValue(), /%% class-layout Item 339 -40/);
     assert.ok(!during.equals(before), 'connector should leave its original route while dragging');
     assert.ok(during.equals(dropped), 'release should not be needed to clear the original connector route');
-    await page.getByRole('tab', { name: 'Diagram 1', exact: true }).click();
+    await featureTab.click();
     await page.mouse.click(x + 65, y + 115);
     await page.getByTestId('color-top-pick-#ffc9c9').click();
     await page.getByTestId('color-top-pick-#e03131').click({ timeout: 1500 });
     await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
     assert.match(await source.inputValue(), /style Order fill:#ffc9c9,stroke:#e03131,color:#e03131/);
-    await page.getByRole('tab', { name: 'Diagram 1', exact: true }).click();
+    await featureTab.click();
     await reset.click({ timeout: 2000 });
     await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
     assert.doesNotMatch(await source.inputValue(), /%% class-layout/);
@@ -66,18 +66,22 @@ test('each class note accepts repeated drags and style choices, downloads, reope
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(2500);
     await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
-    const file = new URL('../diagrams/class/class-notes.md', import.meta.url);
+    const file = examplePath('class');
     const originalBytes = readFileSync(file, 'utf8');
     const original = originalBytes.replace(/\r\n/g, '\n');
+    const feature = 'Standalone and attached notes';
+    const featureTab = page.getByRole('tab', { name: feature, exact: true });
     const open = page.getByLabel('Open Markdown or Mermaid file');
-    await open.setInputFiles(fileURLToPath(file));
+    await open.setInputFiles(file);
+    await featureTab.click();
     const canvas = page.getByRole('tabpanel').locator('.excalidraw');
     const download = page.getByRole('button', { name: 'Download', exact: true });
     await download.and(page.locator(':enabled')).waitFor();
     const bounds = await canvas.boundingBox();
     assert.ok(bounds);
-    const originalDiagram = openDocument('notes.md', original).diagrams[0].source;
-    const shapes = readMappedDiagram(originalDiagram)!.elements.filter((element) => element.type === 'rectangle');
+    const shapesIn = (text: string) => readMappedDiagram(exampleNamed(openDocument(file, text), feature).source)!
+      .elements.filter((element) => element.type === 'rectangle');
+    const shapes = shapesIn(original);
     const midX = (Math.min(...shapes.map((shape) => shape.x)) + Math.max(...shapes.map((shape) => shape.x + shape.width!))) / 2;
     const midY = (Math.min(...shapes.map((shape) => shape.y)) + Math.max(...shapes.map((shape) => shape.y + shape.height!))) / 2;
     const notes = shapes.filter((shape) => shape.id?.startsWith('class-note:'));
@@ -85,11 +89,10 @@ test('each class note accepts repeated drags and style choices, downloads, reope
     const readSource = async () => {
       await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
       const value = await source.inputValue();
-      await page.getByRole('tab', { name: 'Diagram 1', exact: true }).click();
+      await featureTab.click();
       return value;
     };
-    const savedNotes = (value: string) => readMappedDiagram(openDocument('notes.md', value).diagrams[0].source)!
-      .elements.filter((shape) => shape.type === 'rectangle' && shape.id?.startsWith('class-note:'));
+    const savedNotes = (value: string) => shapesIn(value).filter((shape) => shape.id?.startsWith('class-note:'));
     for (const index of notes.keys()) {
       const note = savedNotes(await readSource())[index];
       let x = bounds.x + bounds.width / 2 + note.x + note.width! / 2 - midX;
@@ -140,6 +143,8 @@ test('each class note accepts repeated drags and style choices, downloads, reope
     const exportedBytes = readFileSync((await exported.path())!, 'utf8');
     assert.equal(exportedBytes, originalBytes.includes('\r\n') ? saved.replace(/\n/g, '\r\n') : saved);
     await open.setInputFiles({ name: 'reopened.md', mimeType: 'text/markdown', buffer: Buffer.from(exportedBytes) });
+    await page.getByRole('heading', { name: 'reopened.md', exact: true }).waitFor();
+    await featureTab.click();
     await download.and(page.locator(':enabled')).waitFor();
     assert.equal(await readSource(), saved, 'reopening must not rewrite formatting or Markdown');
     // A saved scene must actually paint the translucent fill, not just retain a comment.
@@ -149,8 +154,7 @@ test('each class note accepts repeated drags and style choices, downloads, reope
         rgba[i + 2] === rgba[i + 1] && rgba[i + 3] > 0);
     });
     assert.ok(painted, 'reopened notes should paint their saved pink fill');
-    const reopenedShapes = readMappedDiagram(openDocument('notes.md', saved).diagrams[0].source)!
-      .elements.filter((element) => element.type === 'rectangle');
+    const reopenedShapes = shapesIn(saved);
     const centerX = (Math.min(...reopenedShapes.map((shape) => shape.x)) +
       Math.max(...reopenedShapes.map((shape) => shape.x + shape.width!))) / 2;
     const centerY = (Math.min(...reopenedShapes.map((shape) => shape.y)) +

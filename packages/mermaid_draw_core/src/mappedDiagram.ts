@@ -628,11 +628,11 @@ function readClasses(source: string, lines: string[], header: number) {
 /** Style-only edits preserve statement order even if comment insertion changes scene IDs. */
 export function mappedStyleOnly(before: string, after: string) {
   const withoutStyles = (source: string) => source.split('\n').filter((line) =>
-    !/^\s*(?:%% (?:graph-transition-style|graph-native-style|graph-style|sequence-style|class-note)\s|style\s)/.test(line)).join('\n');
+    !/^\s*(?:%% (?:graph-transition-style|graph-route|graph-native-style|graph-style|sequence-style|class-note)\s|style\s)/.test(line)).join('\n');
   return before !== after && withoutStyles(before) === withoutStyles(after);
 }
 
-/** Source-owned mapping for whitelisted sequence and class diagrams. Unknown syntax is read-only as a whole. */
+/** Source-owned mapping for supported diagrams. Unknown syntax is read-only as a whole. */
 export function readMappedDiagram(source: string): (ReturnType<typeof mapping> & { resetFormatting?: () => string }) | undefined {
   const lines = source.split('\n');
   const header = diagramHeader(lines);
@@ -640,7 +640,8 @@ export function readMappedDiagram(source: string): (ReturnType<typeof mapping> &
     case 'sequenceDiagram': return readSequence(source, lines, header);
     case 'classDiagram': return readClasses(source, lines, header);
     case 'stateDiagram':
-    case 'stateDiagram-v2': return readGraphDiagram(source, lines, header, true);
-    case 'erDiagram': return readGraphDiagram(source, lines, header, false);
+    case 'stateDiagram-v2': return readGraphDiagram(source, lines, header, 'state');
+    case 'erDiagram': return readGraphDiagram(source, lines, header, 'entity');
+    case 'requirementDiagram': return readGraphDiagram(source, lines, header, 'requirement');
   }
 }

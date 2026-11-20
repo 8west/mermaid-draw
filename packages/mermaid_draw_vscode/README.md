@@ -18,8 +18,9 @@ Edit Mermaid diagrams on an Excalidraw canvas without leaving the editor.
 | Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes. Move class boxes and change fill, outline, and text colors. Relationships follow class moves; their operators and multiplicities are preserved. |
 | State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Includes composite states, concurrent regions, notes, and start/end markers. |
 | Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Includes nested subgraphs. |
+| Requirement (partial) | Edit requirement and element fields and typed relationships. Move, color, or delete boxes. Draw rectangles for new requirements and arrows for `traces` links. Choose Sharp, Curved, or Elbow for connectors. Create elements and change declaration names or kinds in source. |
 
-For supported class, sequence, state, and entity relationship connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments without changing the connector's meaning.
+For supported class, sequence, state, entity relationship, and requirement connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments without changing the connector's meaning.
 
 Class notes support moves, fill/stroke/text colors, fill patterns, stroke width/pattern, roughness, opacity, rounded corners, and font/alignment controls. Formatting uses adjacent `%% class-note` comments. Resizing, rotation, note creation/deletion, and layer changes remain unsupported. See the [editing test matrix](https://github.com/8west/mermaid-draw/blob/master/.scratch/mermaiddraw-roadmap/diagram-type-support-plan.md#verified-editing-coverage) for verification limits.
 

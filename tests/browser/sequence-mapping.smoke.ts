@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { chromium } from 'playwright';
+import { examplePath } from '../diagrams/examples.ts';
+
+const feature = 'Message order and notes';
 
 test('sequence labels open on double-click and edits and reordering reach Mermaid', { timeout: 20_000 }, async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
-    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(fileURLToPath(
-      new URL('../diagrams/sequence/sequence-mapping.md', import.meta.url),
-    ));
+    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(examplePath('sequence'));
+    await page.getByRole('tab', { name: feature, exact: true }).click();
     const canvas = page.getByRole('tabpanel').locator('.excalidraw');
     await canvas.waitFor();
     await page.locator('button:not(:disabled)').and(page.getByRole('button', { name: 'Download', exact: true })).waitFor();
@@ -43,7 +44,9 @@ test('sequence position and color survive reopening and can be reset', { timeout
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
     const open = page.getByLabel('Open Markdown or Mermaid file');
-    await open.setInputFiles(fileURLToPath(new URL('../diagrams/sequence/sequence-mapping.md', import.meta.url)));
+    await open.setInputFiles(examplePath('sequence'));
+    const featureTab = page.getByRole('tab', { name: feature, exact: true });
+    await featureTab.click();
     const canvas = page.getByRole('tabpanel').locator('.excalidraw');
     await canvas.waitFor();
     await page.locator('button:not(:disabled)').and(page.getByRole('button', { name: 'Download', exact: true })).waitFor();
@@ -63,14 +66,15 @@ test('sequence position and color survive reopening and can be reset', { timeout
     const source = page.getByRole('textbox', { name: 'Document source' });
     await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
     assert.match(await source.inputValue(), /%% sequence-layout participant C 67 25/);
-    await page.getByRole('tab', { name: 'Diagram 1', exact: true }).click();
+    await featureTab.click();
     await page.mouse.click(565, 390);
     await page.getByTestId('color-top-pick-#ffc9c9').click({ timeout: 2000 });
     await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
     const saved = await source.inputValue();
     assert.match(saved, /%% sequence-style participant C fill:#ffc9c9/);
     await open.setInputFiles({ name: 'saved.md', mimeType: 'text/markdown', buffer: Buffer.from(saved) });
-    await page.getByRole('tab', { name: 'Diagram 1', exact: true }).click();
+    await page.getByRole('heading', { name: 'saved.md', exact: true }).waitFor();
+    await featureTab.click();
     await page.locator('button:not(:disabled)').and(reset).waitFor({ timeout: 2500 });
     const fillRendered = await canvas.locator('canvas.static').evaluate((surface: HTMLCanvasElement) => {
       const bounds = surface.getBoundingClientRect();

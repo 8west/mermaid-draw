@@ -59,7 +59,7 @@ let mapped: ReturnType<typeof readMappedDiagram>;
 let mappedBaseline: readonly (Pick<ExcalidrawElement, 'id' | 'x' | 'y' | 'version' | 'versionNonce' | 'strokeColor' | 'backgroundColor' |
   'strokeWidth' | 'strokeStyle' | 'opacity' | 'roughness' | 'fillStyle' | 'roundness'>
   & Partial<Pick<ExcalidrawTextElement, 'fontSize' | 'fontFamily' | 'textAlign' | 'verticalAlign'>>
-  & Partial<Pick<ExcalidrawLinearElement, 'startBinding' | 'endBinding'>>)[] = [];
+  & Partial<Pick<ExcalidrawLinearElement, 'startBinding' | 'endBinding' | 'points'>> & { elbowed?: boolean })[] = [];
 let relationshipAnnotations = new Map<string, { arrowId: string; ratio: number; x: number; y: number }>();
 
 function arrowAnchor(arrow: Pick<ExcalidrawLinearElement, 'x' | 'y' | 'points'>, ratio: number) {
@@ -97,9 +97,11 @@ function installMappedScene(diagram: NonNullable<typeof mapped>, mounted?: Excal
       ...(element.type === 'text' && { fontSize: element.fontSize, fontFamily: element.fontFamily,
         textAlign: element.textAlign, verticalAlign: element.verticalAlign }),
       ...(element.type === 'arrow' && {
-      startBinding: element.startBinding && { ...element.startBinding },
-      endBinding: element.endBinding && { ...element.endBinding },
-    }) };
+        elbowed: 'elbowed' in element && element.elbowed,
+        points: element.points.map(([x, y]) => [x, y] as const),
+        startBinding: element.startBinding && { ...element.startBinding },
+        endBinding: element.endBinding && { ...element.endBinding },
+      }) };
   });
   const byId = new Map(scene.map((element) => [element.id, element]));
   relationshipAnnotations = new Map();

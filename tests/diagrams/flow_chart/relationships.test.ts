@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { openDocument } from '../../../packages/mermaid_draw_core/src/diagramDocument.ts';
 import {
   chooseNodeId, getRelationshipSyntax, readFlowchart, removeRelationship, renameNewNode, resetCanvasFormatting, writeArrow, writeLabel,
   writePosition, writeRelationship,
 } from '../../../packages/mermaid_draw_core/src/flowchart.ts';
+import { exampleNamed, examplePath } from '../examples.ts';
 
 test('redraw accepts subgraphs with a local direction', () => {
-  const source = readFileSync(new URL('./subgraph.mermaid', import.meta.url), 'utf8');
+  const path = examplePath('flowchart');
+  const document = openDocument(path, readFileSync(path, 'utf8'));
+  const { source } = exampleNamed(document, 'Subgraph direction');
   const diagram = readFlowchart(source);
   assert.deepEqual([...diagram.subgraphIds], ['D']);
   assert.equal(diagram.nodeIds.size, 16);
@@ -15,7 +19,7 @@ test('redraw accepts subgraphs with a local direction', () => {
   assert.ok(diagram.nodeIds.has('D'));
   assert.ok(diagram.nodeIds.has('H2'));
   assert.equal(diagram.source, source);
-  assert.deepEqual([...readFlowchart('flowchart LR\nsubgraph Group title\nA[One]\nend\n').subgraphIds], ['subGraph0']);
+  assert.deepEqual([...readFlowchart(exampleNamed(document, 'Implicit subgraph ID').source).subgraphIds], ['subGraph0']);
 });
 
 test('redraw accepts labeled, bidirectional Mermaid relationships', () => {

@@ -5,11 +5,13 @@ import { extname, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright';
+import { openDocument } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
 import { webviewHtml } from '../../packages/mermaid_draw_vscode/src/extension/webviewHtml.ts';
+import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 
 const root = fileURLToPath(new URL('../../packages/mermaid_draw_vscode/dist/webview/', import.meta.url));
-const markdown = await readFile(new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url), 'utf8');
-const standalone = await readFile(new URL('../diagrams/flow_chart/flow_chart1.mermaid', import.meta.url), 'utf8');
+const markdown = await readFile(examplePath('flowchart'), 'utf8');
+const examples = openDocument('flowchart.md', markdown);
 const types: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2' };
 type Message = { type: string; base?: string; text?: string };
 
@@ -83,9 +85,10 @@ test('the VS Code webview syncs canvas and document edits without echoes', { tim
   }
 
   try {
-    const page = await open('three-flowcharts.md', markdown);
+    const page = await open('flowchart.md', markdown);
     const eol = markdown.includes('\r\n') ? '\r\n' : '\n';
-    assert.deepEqual(await page.getByRole('tab').allTextContents(), ['Receive the order', 'Prepare the package', 'Ship the package']);
+    await page.getByRole('tab', { name: 'Receive the order', exact: true }).click();
+    assert.deepEqual(await page.getByRole('tab').allTextContents(), examples.diagrams.map(({ title }) => title));
     await canvas(page).waitFor();
     await page.evaluate(() => document.fonts.ready);
     assert.ok(await page.evaluate(() => [...document.fonts].some(
@@ -99,7 +102,7 @@ test('the VS Code webview syncs canvas and document edits without echoes', { tim
 
     // A text edit to another diagram re-renders that canvas in place and is not echoed back.
     const typed = first.text?.replace('Start[Carrier pickup]', 'Start[Carrier collects]') ?? '';
-    await send(page, 'three-flowcharts.md', typed);
+    await send(page, 'flowchart.md', typed);
     await page.waitForTimeout(1_000);
     assert.equal((await edits(page)).length, 1, 'document updates must not echo back as edits');
     await page.getByRole('tab', { name: 'Ship the package' }).click();
@@ -110,15 +113,16 @@ test('the VS Code webview syncs canvas and document edits without echoes', { tim
       `Start[Carrier collects]${eol}    Done[Notify customer]`));
 
     // Invalid text shows an error without writing; fixing the text restores the canvas.
-    await send(page, 'three-flowcharts.md', second.text?.replace('Start[Pick items] -->', 'Start[Pick items] --> -->') ?? '');
+    await send(page, 'flowchart.md', second.text?.replace('Start[Pick items] -->', 'Start[Pick items] --> -->') ?? '');
     await page.getByRole('tab', { name: 'Prepare the package' }).click();
     await page.locator('.diagram-panel:not([inert])').getByRole('alert').waitFor();
-    await send(page, 'three-flowcharts.md', second.text ?? '');
+    await send(page, 'flowchart.md', second.text ?? '');
     await canvas(page).waitFor();
     await page.waitForTimeout(1_000);
     assert.equal((await edits(page)).length, 2, 'invalid or restored text must not be written back');
 
-    const single = await open('flow_chart1.mermaid', standalone);
+    const standalone = exampleNamed(examples, 'Labeled nodes').source;
+    const single = await open('nodes.mermaid', standalone);
     await canvas(single).waitFor();
     assert.equal(await single.getByRole('tab').count(), 0, 'a standalone diagram has no tabs');
     await single.evaluate(() => document.body.classList.add('vscode-dark'));
@@ -128,7 +132,7 @@ test('the VS Code webview syncs canvas and document edits without echoes', { tim
     assert.equal(edit.base, standalone);
     assert.doesNotMatch(edit.text ?? '', /-->/);
 
-    const formatted = 'flowchart LR\nA[Root]\n%% layout A {"x":10,"y":20}\n';
+    const formatted = exampleNamed(examples, 'Saved node position').source;
     const resetPage = await open('reset.mermaid', formatted);
     await canvas(resetPage).waitFor();
     await resetPage.waitForFunction(() => /Source applied/.test(document.querySelector('[role="status"]')?.textContent ?? ''));

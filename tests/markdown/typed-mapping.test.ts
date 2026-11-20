@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { openDocument, resetDiagramFormatting } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
 import { readMappedDiagram } from '../../packages/mermaid_draw_core/src/mappedDiagram.ts';
+import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 
-function fixture(name: string) {
-  const filename = `${name}-mapping.md`;
-  const original = readFileSync(new URL(`../diagrams/${name}/${filename}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const document = openDocument(filename, original);
-  const [diagram] = document.diagrams;
+function fixture(type: string, title: string) {
+  const path = examplePath(type);
+  const original = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+  const document = openDocument(path, original);
+  const diagram = exampleNamed(document, title);
   assert.equal(diagram.editable, true);
   const mapping = readMappedDiagram(diagram.source);
   assert.ok(mapping);
@@ -23,7 +24,7 @@ function fixture(name: string) {
 }
 
 test('sequence canvas edits preserve IDs and operators, and reorder by source statement rather than label', () => {
-  const { mapping, scene, document, original, diagram } = fixture('sequence');
+  const { mapping, scene, document, original, diagram } = fixture('sequence', 'Message order and notes');
   const noteLabel = scene.find(({ originalText }) => originalText === 'Checkout')!;
   const request = mapping.elements.find((element) => element.type === 'arrow' && element.strokeStyle === 'solid')!;
   const reply = mapping.elements.find((element) => element.type === 'arrow' && element.strokeStyle === 'dashed')!;
@@ -61,7 +62,7 @@ test('deleting one identically labeled sequence message preserves the other and 
 });
 
 test('sequence row colors and exact positions follow the statement when reordered and reopened', () => {
-  const { mapping, scene, diagram } = fixture('sequence');
+  const { mapping, scene, diagram } = fixture('sequence', 'Message order and notes');
   const note = mapping.elements.find((element) => element.type === 'rectangle' && element.label?.text === 'Checkout')!;
   const updated = mapping.update(scene, scene.map((element) => element.id === note.id
     ? { ...element, x: element.x + 19, y: 80, backgroundColor: '#ffc9c9' }
@@ -77,7 +78,7 @@ test('sequence row colors and exact positions follow the statement when reordere
 });
 
 test('class canvas edits preserve composition and multiplicities, and moved classes reopen at their saved position', () => {
-  const { mapping, scene, document, original, diagram } = fixture('class');
+  const { mapping, scene, document, original, diagram } = fixture('class', 'Composition and members');
   const replacements = new Map([
     ['Purchase Order', 'Customer Order'], ['+submit() void', '+send() void'], ['contains', 'includes'],
   ]);
@@ -137,8 +138,8 @@ test('connector appearance reopens without changing class, sequence, or entity r
 });
 
 test('untouched scenes do not rewrite source and an invalid canvas label is rejected', () => {
-  for (const name of ['sequence', 'class']) {
-    const { diagram, mapping, scene } = fixture(name);
+  for (const [type, title] of [['sequence', 'Message order and notes'], ['class', 'Composition and members']]) {
+    const { diagram, mapping, scene } = fixture(type, title);
     assert.equal(mapping.update(scene, scene), diagram.source);
     const after = scene.map((element) => element.originalText === 'Customer' || element.originalText === 'Purchase Order'
       ? { ...element, originalText: 'New\nline' } : element);
@@ -251,7 +252,7 @@ test('unknown class syntax is read-only and its source is preserved', () => {
 });
 
 test('nested concurrent states preserve scoped markers, notes, and transition targets after an alias edit', () => {
-  const { mapping, scene, diagram } = fixture('state');
+  const { mapping, scene, diagram } = fixture('state', 'Concurrent regions');
   const updated = mapping.update(scene, scene.map((element) => element.originalText === 'Idle'
     ? { ...element, originalText: 'Waiting for work' } : element));
   assert.match(updated, /state "Waiting for work" as Idle/);
@@ -262,19 +263,7 @@ test('nested concurrent states preserve scoped markers, notes, and transition ta
 });
 
 test('the state documentation example lays out the main path and routes shortcuts around it', () => {
-  const source = `---
-title: Simple sample
----
-stateDiagram-v2
-    [*] --> Still
-    Still --> [*]
-
-    Still --> Moving
-    Moving --> Still
-    Moving --> Crash
-    Crash --> [*]
-`;
-  const mapping = readMappedDiagram(source)!;
+  const { mapping } = fixture('state', 'State transitions');
   const boxes = ['start:marker', 'Still', 'Moving', 'Crash', 'end:marker'].map((name) =>
     mapping.elements.find((element) => element.id === `state:/0/${name}` && (element.type === 'rectangle' || element.type === 'ellipse'))!);
   for (const [index, box] of boxes.slice(1).entries()) {
@@ -310,7 +299,7 @@ test('state arrow styling survives line changes, and reset and deletion remove o
 });
 
 test('entity relationship edits preserve keys, subgraphs, cardinalities, and relationship identity', () => {
-  const { mapping, scene, diagram } = fixture('entity_relationship');
+  const { mapping, scene, diagram } = fixture('entity-relationship', 'Attributes and subgraphs');
   const updated = mapping.update(scene, scene.map((element) => {
     if (element.originalText === 'string? email UK "Contact address"') {
       return { ...element, originalText: 'string? billingEmail UK "Billing address"' };
@@ -325,7 +314,7 @@ test('entity relationship edits preserve keys, subgraphs, cardinalities, and rel
 });
 
 test('adding a transition in a concurrent region writes it before that region closes', () => {
-  const { mapping, scene, diagram } = fixture('state');
+  const { mapping, scene, diagram } = fixture('state', 'Concurrent regions');
   const idle = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Idle')!;
   const running = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Running')!;
   const next = mapping.update(scene, [...scene, {
@@ -336,7 +325,7 @@ test('adding a transition in a concurrent region writes it before that region cl
 });
 
 test('resetting entity formatting restores authored styles without reverting attribute edits', () => {
-  const { diagram } = fixture('entity_relationship');
+  const { diagram } = fixture('entity-relationship', 'Attributes and subgraphs');
   const source = diagram.source.replace('    direction LR', '    direction LR\n    style CUSTOMER stroke:#1971c2');
   const mapping = readMappedDiagram(source)!;
   const scene = mapping.elements.map((element) => ({
@@ -357,11 +346,158 @@ test('resetting entity formatting restores authored styles without reverting att
 });
 
 test('drawing attribute text inside an entity adds it to that entity without moving relationships', () => {
-  const { mapping, scene, diagram } = fixture('entity_relationship');
+  const { mapping, scene, diagram } = fixture('entity-relationship', 'Attributes and subgraphs');
   const box = mapping.elements.find((element) => element.id === 'entity:CUSTOMER')!;
   const before = scene.map((element) => element.id === box.id ? { ...element, width: 280, height: 100 } : element);
   const updated = mapping.update(before, [...before, {
     id: 'drawn-attribute', type: 'text', originalText: 'string externalId UK', x: box.x + 10, y: box.y + 55,
   }]);
   assert.equal(updated, diagram.source.replace('"Contact address"\n', '"Contact address"\n            string externalId UK\n'));
+});
+
+test('requirement fields, typed links and formatting round-trip without rewriting neighboring Markdown', () => {
+  const { diagram, document, original, mapping, scene } = fixture('requirement', 'Fields and reverse links');
+  const [arrow] = mapping.elements.filter((element) => element.type === 'arrow');
+  const box = 'requirement:Retry';
+  assert.equal(arrow.start?.id, 'requirement:Checkout%20suite');
+  assert.equal(arrow.end?.id, box);
+  assert.equal(mapping.update(scene, scene), diagram.source);
+  const updated = mapping.update(scene, scene.map((element) => {
+    if (element.id === box) return { ...element, x: -40, y: 120, backgroundColor: '#ffc9c9' };
+    if (element.id === arrow.id) return { ...element, strokeWidth: 4 };
+    if (element.originalText === 'verifies') return { ...element, originalText: 'contains' };
+    if (element.originalText === 'text: A failed payment can be retried.') return { ...element, originalText: 'text: Retry: orders 1-3' };
+    return element;
+  }));
+  const semantic = diagram.source.replace('A failed payment can be retried.', '"Retry: orders 1-3"').replace('<- verifies -', '<- contains -');
+  assert.equal(resetDiagramFormatting(updated, diagram.source), semantic);
+  const saved = document.save(new Map([[diagram.id, updated]]));
+  assert.equal(saved, original.replace(diagram.source, updated));
+  const reopened = readMappedDiagram(exampleNamed(openDocument('saved.md', saved), diagram.title).source)!;
+  const retry = reopened.elements.find(({ id }) => id === box)!;
+  assert.deepEqual([retry.x, retry.y, retry.backgroundColor, retry.strokeColor], [-40, 120, '#ffc9c9', '#1971c2']);
+  const [contains] = reopened.elements.filter((element) => element.type === 'arrow');
+  assert.deepEqual([contains.startArrowhead, contains.endArrowhead, contains.strokeWidth], ['circle_outline', null, 4]);
+  const before = reopened.elements.map((element) => ({ ...element, id: element.id! }));
+  const again = reopened.update(before, before.map((element) => element.id === box ? { ...element, y: 135 }
+    : element.type === 'text' && element.text === 'risk: medium' ? { ...element, originalText: 'risk: high' } : element));
+  assert.equal(readMappedDiagram(again)!.elements.find(({ id }) => id === box)?.y, 135);
+  assert.equal(resetDiagramFormatting(again, diagram.source), semantic.replace('risk: medium', 'risk: high'));
+});
+
+test('requirement syntax covers every declaration and relationship kind, with forward references', () => {
+  const kinds = ['requirement', 'functionalRequirement', 'interfaceRequirement', 'performanceRequirement', 'physicalRequirement', 'designConstraint', 'element'];
+  const relations = ['contains', 'copies', 'derives', 'satisfies', 'verifies', 'refines', 'traces'];
+  const source = ['requirementDiagram', ...relations.map((rel, i) => `N${i} - ${rel} -> N0`),
+    ...kinds.map((kind, i) => `${kind} N${i} {\n}`)].join('\n');
+  const mapped = readMappedDiagram(source)!;
+  assert.deepEqual(mapped.elements.flatMap((e) => e.type === 'rectangle' ? [e.label?.text] : []),
+    kinds.map((kind, i) => `${kind} N${i}`));
+  assert.deepEqual(mapped.elements.flatMap((e) => e.type === 'arrow' ? [e.label?.text] : []), relations);
+});
+
+test('dragging a service beside another requirement keeps their incoming links separate', () => {
+  const source = `requirementDiagram
+requirement Checkout {
+}
+requirement Payment {
+}
+element Service {
+}
+Checkout - contains -> Payment
+Service - satisfies -> Payment
+%% graph-layout requirement:Checkout -331 -38
+%% graph-layout requirement:Payment -150 251
+%% graph-layout requirement:Service 257 500`;
+  const mapping = readMappedDiagram(source)!;
+  const before = mapping.elements.map((e) => ({ ...e, id: e.id! }));
+  const moveService = (x: number, y: number) => {
+    const updated = mapping.update(before, before.map((e) => e.id === 'requirement:Service' ? { ...e, x, y } : e));
+    return readMappedDiagram(updated)!.elements.filter((e) => e.type === 'arrow');
+  };
+  const [contains, satisfies] = moveService(257, -35);
+  const end = (arrow: typeof contains) => {
+    const [dx, dy] = arrow.points!.at(-1)!;
+    return [arrow.x + dx, arrow.y + dy];
+  };
+  assert.notDeepEqual(end(contains), end(satisfies), 'different approaches should not share a final leg');
+  assert.ok([contains, satisfies].every((e) => e.points?.length === 2), 'neither direct path intersects a third box');
+  const [blocked] = moveService(-220, 100);
+  assert.ok(blocked.points!.length > 2, 'still detour when the service actually blocks the checkout link');
+});
+
+test('drawing and removing requirements updates their fields, relationships and owned metadata', () => {
+  const { mapping, scene, diagram } = fixture('requirement', 'Fields and reverse links');
+  const box = mapping.elements.find((e) => e.type === 'rectangle' && e.id === 'requirement:Checkout%20suite')!;
+  const base = scene.map((e) => e.id === box.id ? { ...e, width: box.width, height: box.height } : e);
+  const updated = mapping.update(base, [...base,
+    { type: 'rectangle', id: 'drawn', x: 30, y: 300 },
+    { type: 'arrow', id: 'link', x: 0, y: 0, startBinding: { elementId: 'drawn' }, endBinding: { elementId: box.id! } },
+  ]);
+  assert.match(updated, /requirement Requirement1 \{\n\s+id: Requirement1\n/);
+  assert.match(updated, /Requirement1 - traces -> "Checkout suite"/);
+  const reopened = readMappedDiagram(updated)!;
+  const before = reopened.elements.map((element) => ({ ...element, id: element.id! }));
+  const added = before.find((e) => e.id === 'requirement:Requirement1')!;
+  const withRisk = reopened.update(before, [...before, { type: 'text', id: 'row', x: added.x + 10, y: added.y + 42, originalText: 'risk: high' }]);
+  assert.match(withRisk, /text: "New requirement"\n\s+risk: high\n}/);
+  const withField = readMappedDiagram(withRisk)!;
+  const beforeDelete = withField.elements.map((element) => ({ ...element, id: element.id! }));
+  assert.equal(withField.update(beforeDelete, beforeDelete.filter((element) => element.id !== added.id)), diagram.source);
+});
+
+test('reconnecting a reverse requirement link uses declaration names, not edited id fields', () => {
+  const source = 'requirementDiagram\nrequirement First {\n    id: 1\n}\nrequirement Second {\n    id: 2\n}\n' +
+    'element Check suite {\n    type: automated;\n}\nFirst <- verifies - Check suite\n';
+  const mapped = readMappedDiagram(source)!;
+  const before = mapped.elements.map((e) => ({ ...e, id: e.id! }));
+  const after = before.map((e) => {
+    if (e.type === 'arrow') return { ...e, endBinding: { elementId: 'requirement:Second' } };
+    if (e.id === 'requirement:Check%20suite') return { ...e, strokeColor: '#1971c2' };
+    if (e.type === 'text' && e.text === 'id: 2') return { ...e, originalText: 'id: PAY-2' };
+    if (e.type === 'text' && e.text === 'type: automated;') return { ...e, originalText: 'type: test suite' };
+    return e;
+  });
+  const updated = mapped.update(before, after);
+  assert.match(updated, /style "Check suite" stroke:#1971c2/);
+  assert.equal(resetDiagramFormatting(updated, source), source.replace('First <-', 'Second <-')
+    .replace('id: 2', 'id: "PAY-2"').replace('automated;', '"test suite"'));
+  const [arrow] = readMappedDiagram(updated)!.elements.filter((e) => e.type === 'arrow');
+  assert.equal(arrow.end?.id, 'requirement:Second');
+});
+
+test('connector bends belong to the statement and never excuse a detached endpoint that actually moved', () => {
+  const source = 'requirementDiagram\nelement A {\n}\nrequirement B {\n}\nA - verifies -> B\nA - verifies -> B\n';
+  const diagram = readMappedDiagram(source)!;
+  const [arrow] = diagram.elements.filter((e) => e.type === 'arrow');
+  const before = { ...arrow, id: arrow.id!, startBinding: { elementId: arrow.start!.id! }, endBinding: { elementId: arrow.end!.id! } };
+  const end = arrow.points!.at(-1)!;
+  const after = { ...before, endBinding: null, strokeWidth: 4, points: [[0, 0], [87, 42], end] as const };
+  assert.throws(() => diagram.update([before], [{ ...after, points: [[0, 0], [87, 42], [end[0] + 30, end[1]]] }]),
+    /Connect both ends/);
+  const edited = diagram.update([before], [after]);
+  const shifted = edited.replace('element A', '%% keep\n element A');
+  const reopened = readMappedDiagram(shifted)!;
+  const [first, second] = reopened.elements.filter((e) => e.type === 'arrow');
+  assert.equal(first.strokeWidth, 4);
+  assert.ok(first.points?.[1] && Math.abs(first.points[1][0] - 87) < 0.001 && Math.abs(first.points[1][1] - 42) < 0.001);
+  assert.notDeepEqual(second.points?.[1], first.points?.[1]);
+  assert.equal(reopened.resetFormatting?.(), source.replace('element A', '%% keep\n element A'));
+  const deleted = reopened.update([{ ...first, id: first.id! }], []);
+  assert.equal(deleted, source.replace('element A', '%% keep\n element A').replace('A - verifies -> B\n', ''));
+});
+
+test('unsupported requirement syntax stays read-only and invalid field or relationship edits are rejected', () => {
+  const { diagram, mapping, scene } = fixture('requirement', 'Fields and reverse links');
+  for (const [from, to] of [['risk: medium', 'risk: urgent'], ['verifymethod: test', 'verifymethod: guess'],
+    ['type: "test suite"', 'risk: low'], ['<- verifies -', '- verifies -'], ['<- verifies -', '<- relates -'],
+    ['Retry <-', 'Missing <-'], ['element "Checkout suite" {', 'element Retry {'], ['    }\n', '\n']]) {
+    const source = diagram.source.replace(from, to);
+    const doc = openDocument('unsupported.mermaid', source);
+    assert.equal(doc.diagrams[0].editable, false, to);
+    assert.equal(doc.save(new Map([[1, '']])), source);
+  }
+  for (const [from, to] of [['risk: medium', 'risk: urgent'], ['verifymethod: test', 'verifymethod: guess'], ['verifies', 'relates']]) {
+    assert.throws(() => mapping.update(scene, scene.map((e) => e.originalText === from ? { ...e, originalText: to } : e)), /Use a/);
+  }
 });

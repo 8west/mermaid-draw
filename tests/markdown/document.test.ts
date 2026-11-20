@@ -2,14 +2,38 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { openDocument } from '../../packages/mermaid_draw_core/src/diagramDocument.ts';
+import { readFlowchart } from '../../packages/mermaid_draw_core/src/flowchart.ts';
+import { diagramHeader } from '../../packages/mermaid_draw_core/src/mappedDiagram.ts';
+import { exampleNamed, examplePath } from '../diagrams/examples.ts';
+
+for (const [type, header] of Object.entries({
+  flowchart: /^(?:flowchart|graph)\b/, sequence: /^sequenceDiagram$/, class: /^classDiagram$/,
+  state: /^stateDiagram(?:-v2)?$/, 'entity-relationship': /^erDiagram$/, requirement: /^requirementDiagram$/,
+})) {
+  test(`every ${type} example opens as a named editable diagram`, () => {
+    const path = examplePath(type);
+    const text = readFileSync(path, 'utf8');
+    const document = openDocument(path, text);
+    assert.ok(document.diagrams.length, `No Mermaid blocks in ${path}`);
+    const firstSection = text.split(/^## /m)[1] ?? '';
+    assert.match(firstSection, /\(https:\/\/mermaid\.js\.org\/syntax\/[^)]+#[^)]+\)/, 'link the first example to its official section');
+    for (const { title, source, editable } of document.diagrams) {
+      assert.doesNotMatch(title, /^Diagram \d+$/, 'give each block an adjacent feature heading');
+      exampleNamed(document, title);
+      const lines = source.split('\n');
+      assert.match(lines[diagramHeader(lines)]?.trim() ?? '', header, title);
+      assert.equal(editable, true, title);
+      if (type === 'flowchart') assert.ok(readFlowchart(source).nodeIds.size, title);
+    }
+  });
+}
 
 test('one Markdown export combines edits without touching the rest of the file', () => {
-  const original = readFileSync(new URL('../diagrams/flow_chart/three-flowcharts.md', import.meta.url), 'utf8').replace(/\r?\n/g, '\r\n');
-  const document = openDocument('orders.md', original);
-  assert.deepEqual(document.diagrams.map(({ title }) => title), [
-    'Receive the order', 'Prepare the package', 'Ship the package',
-  ]);
-  const [first, second] = document.diagrams;
+  const path = examplePath('flowchart');
+  const original = readFileSync(path, 'utf8').replace(/\r?\n/g, '\r\n');
+  const document = openDocument(path, original);
+  const first = exampleNamed(document, 'Receive the order');
+  const second = exampleNamed(document, 'Prepare the package');
   assert.equal(document.save(new Map([
     [first.id, first.source.replace('Order confirmed', 'Order approved')],
     [second.id, second.source.replace('Print shipping label', 'Make shipping label')],

@@ -1,9 +1,11 @@
 import type { convertToExcalidrawElements } from '@excalidraw/excalidraw';
-import type { Arrowhead } from '@excalidraw/excalidraw/element/types';
+import type { Arrowhead, ExcalidrawArrowElement } from '@excalidraw/excalidraw/element/types';
 import { changedConnectorStyle, readConnectorStyle, writeConnectorStyle, type ConnectorStyle } from './connectorStyle.ts';
+import { requirementDeclaration, requirementField, requirementRelationship, writeRequirementRelationship } from './requirementSyntax.ts';
 
 type Skeleton = NonNullable<Parameters<typeof convertToExcalidrawElements>[0]>[number];
 type Point = { x: number; y: number };
+type Waypoint = readonly [number, number];
 type Bounds = Point & { width: number; height: number };
 export type GraphCanvasElement = Point & {
   id: string; type?: string; width?: number; height?: number; originalText?: string; isDeleted?: boolean;
@@ -11,15 +13,19 @@ export type GraphCanvasElement = Point & {
   strokeWidth?: number; opacity?: number; roughness?: number;
   startArrowhead?: Arrowhead | null; endArrowhead?: Arrowhead | null;
   startBinding?: { elementId: string } | null; endBinding?: { elementId: string } | null;
+  points?: readonly Waypoint[];
+  elbowed?: boolean; roundness?: { type: number } | null;
   boundElements?: readonly { id: string; type: string }[] | null;
 };
 type TextSlot = { line: number; text: string; write: (text: string) => string };
 type Direction = 'LR' | 'RL' | 'TB' | 'BT';
+type GraphType = 'state' | 'entity' | 'requirement';
 type Scope = { key: string; parent?: Node; regions: Node[][]; regionEnds: number[]; direction?: Direction; start: number; end: number };
 type Node = {
   id: string; name: string; scope: Scope; region: number; kind: 'box' | 'start' | 'end' | 'choice' | 'bar' | 'note';
   declarations: number[]; label?: TextSlot; fields: TextSlot[]; child?: Scope; classes: string[];
-  reference: string; firstLine: number; attributeBlockEnd?: number; insertLabel?: (text: string) => string;
+  reference: string; firstLine: number; fieldBlockEnd?: number; insertLabel?: (text: string) => string;
+  requirementKind?: string;
 };
 type Edge = {
   id: string; from: Node; to: Node; line: number; scope: Scope; label?: TextSlot;
@@ -101,7 +107,8 @@ function paintOf(properties: string): Paint {
   return paint;
 }
 
-function parseGraph(lines: string[], header: number, state: boolean): Graph | undefined {
+function parseGraph(lines: string[], header: number, type: GraphType): Graph | undefined {
+  const state = type === 'state';
   const end = lines.at(-1) === '' ? lines.length - 1 : lines.length;
   const root: Scope = { key: '', regions: [[]], regionEnds: [end], start: header, end };
   const nodes = new Map<string, Node>();
@@ -109,18 +116,17 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
   const definitions = new Map<string, Paint>();
   const appliedClasses = new Map<string, string[]>();
   const nativePaint = new Map<string, Paint>();
-  const entityReferences = new Map<string, Node>();
   const pendingEdges: { from: string; to: string; bind: (from: Node, to: Node) => Edge }[] = [];
   let scope = root;
-  let entity: Node | undefined;
+  let fieldOwner: Node | undefined;
   let note: Node | undefined;
   let accessibilityBlock = false;
   let region = 0;
   const ensure = (reference: string, line: number, kind: Node['kind'] = 'box') => {
     const name = referenceName(reference);
-    const raw = name === '[*]' ? kind : name;
+    const raw = state && name === '[*]' ? kind : name;
     const id = state ? `state:${scope.key}/${region}/${encodeURIComponent(raw)}${name === '[*]' ? ':marker' : ''}`
-      : `entity:${encodeURIComponent(raw)}`;
+      : `${type}:${encodeURIComponent(raw)}`;
     const existing = nodes.get(id);
     if (existing) {
       existing.classes.push(...classes(reference));
@@ -134,9 +140,9 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
   };
   for (let line = header + 1; line < lines.length; line++) {
     const [code, comment] = statement(lines[line]);
-    const body = code.trim().replace(/;$/, '');
+    const body = type === 'requirement' ? code.trim() : code.trim().replace(/;$/, '');
     const indent = lineIndent(code);
-    const suffix = `${code.trimEnd().endsWith(';') ? ';' : ''}${comment ? ` ${comment}` : ''}`;
+    const suffix = `${type !== 'requirement' && code.trimEnd().endsWith(';') ? ';' : ''}${comment ? ` ${comment}` : ''}`;
     const slot = (text: string, write: (value: string) => string): TextSlot =>
       ({ line, text, write: (value) => `${indent}${write(value)}${suffix}` });
     if (accessibilityBlock) {
@@ -150,30 +156,66 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
       continue;
     }
     if (!body) continue;
-    if (entity) {
+    if (fieldOwner) {
       if (body === '}') {
-        entity.declarations.push(line);
-        entity.attributeBlockEnd = line;
-        entity = undefined;
+        fieldOwner.declarations.push(line);
+        fieldOwner.fieldBlockEnd = line;
+        fieldOwner = undefined;
       }
-      else if (attribute.test(body)) entity.fields.push(slot(body, (value) => value));
+      else if (fieldOwner.requirementKind) {
+        const kind = fieldOwner.requirementKind;
+        const field = requirementField(kind, body);
+        if (!field || fieldOwner.fields.some(({ text }) => text.split(':')[0].toLowerCase() === field.field)) return;
+        fieldOwner.fields.push(slot(field.text, (value) => {
+          const edit = requirementField(kind, value, true);
+          if (!edit || edit.field !== field.field) throw new Error(`Use a valid ${field.field} field.`);
+          return edit.source;
+        }));
+      }
+      else if (attribute.test(body)) fieldOwner.fields.push(slot(body, (value) => value));
       else return;
       continue;
     }
     const direction = body.match(directionPattern);
     if (direction) {
+      if (type === 'requirement' && direction[1].toUpperCase() === 'TD') return;
       scope.direction = direction[1].toUpperCase() === 'TD' ? 'TB' : direction[1].toUpperCase() as Direction;
       continue;
     }
     if (/^acc(?:Title|Descr)\s*:/i.test(body)) continue;
     if (/^accDescr\s*\{$/i.test(body)) { accessibilityBlock = true; continue; }
-    const appearance = body.match(/^(classDef|class|style)\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+(.+)$/);
+    const appearance = type === 'requirement'
+      ? body.match(/^(classDef|class|style)\s+("[^"]+"|\w+(?:\s*,\s*\w+)*)\s+(.+)$/)
+      : body.match(/^(classDef|class|style)\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+(.+)$/);
     if (appearance) {
-      for (const target of appearance[2].split(/\s*,\s*/)) {
+      for (const target of appearance[2].startsWith('"') ? [unquote(appearance[2])] : appearance[2].split(/\s*,\s*/)) {
         if (appearance[1] === 'classDef') definitions.set(target, paintOf(appearance[3]));
         else if (appearance[1] === 'style') nativePaint.set(target, { ...nativePaint.get(target), ...paintOf(appearance[3]) });
         else appliedClasses.set(target, [...appliedClasses.get(target) ?? [], ...appearance[3].split(/\s*,\s*/)]);
       }
+      continue;
+    }
+    if (type === 'requirement') {
+      const declaration = requirementDeclaration(body);
+      if (declaration) {
+        fieldOwner = ensure(declaration.reference, line);
+        if (fieldOwner.declarations.length) return;
+        fieldOwner.declarations.push(line);
+        fieldOwner.requirementKind = declaration.kind;
+        fieldOwner.classes.push(...declaration.classes);
+        continue;
+      }
+      const relation = requirementRelationship(body);
+      if (!relation) return;
+      const { from, to, label, reverse } = relation;
+      const contains = label.toLowerCase() === 'contains';
+      const write = (value: string, a: string, b: string) =>
+        `${indent}${writeRequirementRelationship(a, value, b, reverse)}${suffix}`;
+      pendingEdges.push({ from, to, bind: (a, b) => ({
+        id: `relationship:${line}`, line, from: a, to: b, scope: root, references: [from, to],
+        heads: contains ? ['circle_outline', null] : [null, 'arrow'], dashed: !contains, write,
+        label: { line, text: label, write: (value) => write(value, from, to) },
+      }) });
       continue;
     }
     if (state ? body === '}' : body === 'end') {
@@ -250,7 +292,7 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
           cardinalities: heads.map(cardinalityLabel) as [string, string],
           heads, dashed, write, label: { line, text: unquote(label), write: (value) => write(value, a, b, heads, dashed) } });
         pendingEdges.push({ from: a, to: b, bind });
-        for (const endpoint of [a, b]) entityReferences.set(referenceName(endpoint), ensure(endpoint, line));
+        for (const endpoint of [a, b]) ensure(endpoint, line);
         continue;
       }
       const group = body.match(entityGroup);
@@ -265,7 +307,6 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
         node.scope = scope;
         node.region = region;
       }
-      entityReferences.set(referenceName(id), node);
       node.classes.push(...classes(body));
       node.declarations.push(line);
       if (alias) node.label = slot(unquote(alias.trim()), (value) => {
@@ -279,14 +320,17 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
         scope = node.child = { key: node.id, parent: node, regions: [[]], regionEnds: [], start: line, end: -1 };
       } else {
         if (!alias && !node.label) node.label = slot(node.name, (value) => body.replace(id, () => `${id}["${value}"]`));
-        if (declaration?.[3]) entity = node;
+        if (declaration?.[3]) fieldOwner = node;
       }
       node.insertLabel = (value) => `${node.reference}["${value}"]`;
     }
   }
-  if (scope !== root || entity || note || accessibilityBlock) return;
+  if (scope !== root || fieldOwner || note || accessibilityBlock) return;
   for (const { from, to, bind } of pendingEdges) {
-    edges.push(bind(entityReferences.get(referenceName(from))!, entityReferences.get(referenceName(to))!));
+    const a = nodes.get(`${type}:${encodeURIComponent(referenceName(from))}`);
+    const b = nodes.get(`${type}:${encodeURIComponent(referenceName(to))}`);
+    if (!a || !b) return;
+    edges.push(bind(a, b));
   }
   for (const node of nodes.values()) {
     const names = [...appliedClasses.get(node.name) ?? [], ...node.classes];
@@ -296,7 +340,9 @@ function parseGraph(lines: string[], header: number, state: boolean): Graph | un
   return { root, nodes, edges, nativePaint };
 }
 
-const labelOf = (node: Node) => node.label?.text ?? node.name;
+const labelOf = (node: Node) => node.requirementKind ? `${node.requirementKind} ${node.name}` : node.label?.text ?? node.name;
+// In a native style statement Mermaid requires a quoted target for multiword names.
+const styleTarget = (node: Node) => node.requirementKind && !/^\w+$/.test(node.name) ? `"${node.name}"` : node.reference;
 const fieldId = (field: TextSlot) => `field:${field.line}:label`;
 const widthOf = (value: string) => value.length * 10 + 28;
 const measure = (value: string) => Math.max(125, widthOf(value));
@@ -354,7 +400,27 @@ function layout(scope: Scope, origin: Point, saved: Map<string, Point>, boxes: M
     height: Math.max(0, ...local.map(({ y, height }) => y + height - origin.y)) };
 }
 
-function stateDetour(edge: Edge, boxes: Map<string, Bounds>, parallel: number): Point[] | undefined {
+// A direct link hits the box only if it is inside both axis ranges at the same time.
+function crossesBox(from: Point, to: Point, box: Bounds): boolean {
+  let enter = 0;
+  let exit = 1;
+  for (const [axis, size] of [['x', 'width'], ['y', 'height']] as const) {
+    const delta = to[axis] - from[axis];
+    const low = box[axis] - from[axis];
+    const high = low + box[size];
+    if (delta === 0) {
+      if (low > 0 || high < 0) return false;
+    } else {
+      const t1 = low / delta;
+      const t2 = high / delta;
+      enter = Math.max(enter, Math.min(t1, t2));
+      exit = Math.min(exit, Math.max(t1, t2));
+    }
+  }
+  return enter <= exit;
+}
+
+function graphDetour(edge: Edge, boxes: Map<string, Bounds>, parallel: number, state: boolean): Point[] | undefined {
   const { from, to } = edge;
   if (from === to || from.scope !== to.scope || from.region !== to.region || !edge.write) return;
   const { direction, regions } = from.scope;
@@ -370,10 +436,14 @@ function stateDetour(edge: Edge, boxes: Map<string, Bounds>, parallel: number): 
   const start = middle(a);
   const end = middle(b);
   const backward = reverse ? start < end : start > end;
+  const center = (box: Bounds) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+  const fromCenter = center(a);
+  const toCenter = center(b);
   const between = regions[from.region].filter((node) => node !== from && node !== to && node.kind !== 'note')
     .map(({ id }) => boxes.get(id)!)
-    .filter((box) => along(box) < Math.max(start, end) && along(box) + length(box) > Math.min(start, end));
-  if (!backward && !parallel && !between.length) return;
+    .filter((box) => state ? along(box) < Math.max(start, end) && along(box) + length(box) > Math.min(start, end)
+      : crossesBox(fromCenter, toCenter, box));
+  if (!(backward && state) && !parallel && !between.length) return;
   const side = backward || (!between.length && parallel > 0) ? 1 : -1;
   const extent = (box: Bounds) => across(box) + (side === 1 ? breadth(box) : 0);
   const lane = (side === 1 ? Math.max : Math.min)(...between.map(extent), extent(a), extent(b)) + side * (26 + parallel * 12);
@@ -381,8 +451,48 @@ function stateDetour(edge: Edge, boxes: Map<string, Bounds>, parallel: number): 
   return [point(start, extent(a) + side * 4), point(start, lane), point(end, lane), point(end, extent(b) + side * 4)];
 }
 
-function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map<string, Paint>, state: boolean,
-  transitionStyles: Map<string, ConnectorStyle>) {
+type ArrowKind = 'sharp' | 'curved' | 'elbow';
+type SavedRoute = { line: number; kind: ArrowKind; bends?: Waypoint[] };
+const arrowKind = (arrow: GraphCanvasElement): ArrowKind => arrow.elbowed ? 'elbow' : arrow.roundness ? 'curved' : 'sharp';
+
+function isWaypoint(value: unknown): value is Waypoint {
+  return Array.isArray(value) && value.length === 2 && value.every(Number.isFinite);
+}
+
+function scenePoint(element: GraphCanvasElement, point: Waypoint): Waypoint {
+  return [element.x + point[0], element.y + point[1]];
+}
+
+const samePoint = (a: Waypoint, b: Waypoint) => Math.abs(a[0] - b[0]) < 0.001 && Math.abs(a[1] - b[1]) < 0.001;
+
+function routeComment(kind: ArrowKind, bends: Waypoint[] | undefined) {
+  if (bends && !bends.every(isWaypoint)) throw new Error('Use finite connector coordinates.');
+  if (kind === 'sharp' && !bends) return;
+  return `%% graph-route ${JSON.stringify(kind === 'sharp' ? bends : { kind, bends })}`;
+}
+
+// Excalidraw binds elbow skeletons but doesn't route their diagonal segments.
+function elbowPoints(points: [number, number][], startsHorizontal: boolean, endsHorizontal: boolean) {
+  const result = [points[0]];
+  let horizontal = startsHorizontal;
+  for (const [i, [x, y]] of points.slice(1).entries()) {
+    const [px, py] = points[i];
+    if (px !== x && py !== y) {
+      const leaveHorizontal = i === points.length - 2 ? endsHorizontal : points[i + 2][0] === x;
+      if (horizontal === leaveHorizontal) {
+        const mid = horizontal ? (px + x) / 2 : (py + y) / 2;
+        result.push(horizontal ? [mid, py] : [px, mid], horizontal ? [mid, y] : [x, mid]);
+      } else result.push(horizontal ? [x, py] : [px, y]);
+    }
+    horizontal = result.at(-1)![0] === x;
+    result.push([x, y]);
+  }
+  return result;
+}
+
+function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map<string, Paint>, type: GraphType,
+  transitionStyles: Map<string, ConnectorStyle>, routes: Map<string, SavedRoute>) {
+  const state = type === 'state';
   const boxes = new Map<string, Bounds>();
   const elements: Skeleton[] = [];
   const foreground: Skeleton[] = [];
@@ -439,19 +549,27 @@ function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map
     const key = [edge.from.id, edge.to.id].sort().join(' ');
     const count = parallel.get(key) ?? 0;
     parallel.set(key, count + 1);
-    const route = state && !loop ? stateDetour(edge, boxes, count) : undefined;
+    const route = type !== 'entity' && !loop ? graphDetour(edge, boxes, count, state) : undefined;
     const start = route?.[0] ?? (loop ? { x: a.x + a.width + 4, y: a.y + a.height / 4 } : boundary(a, 1));
     const end = route?.at(-1) ?? (loop ? { x: b.x + b.width + 4, y: b.y + b.height * 0.75 } : boundary(b, -1));
     const endPoint: [number, number] = [end.x - start.x, end.y - start.y];
     const bend = 36 + 22 * count;
-    const points: [number, number][] = route ? route.map(({ x, y }) => [x - start.x, y - start.y]) : [[0, 0],
+    const saved = routes.get(edge.id);
+    const points: [number, number][] = saved?.bends
+      ? [[0, 0], ...saved.bends.map(([x, y]): [number, number] => [x - start.x, y - start.y]), endPoint]
+      : route ? route.map(({ x, y }) => [x - start.x, y - start.y]) : [[0, 0],
       ...(loop ? [[bend, 0], [bend, endPoint[1]]] as [number, number][]
         : count ? [[endPoint[0] / 2 + dy / Math.hypot(dx, dy) * bend, endPoint[1] / 2 - dx / Math.hypot(dx, dy) * bend]] as [number, number][] : []),
       endPoint];
     const label = edge.label?.text ? { id: `${edge.id}:label`, text: edge.label.text, fontSize: 16, fontFamily: 3 as const } : undefined;
-    connectors.push({ id: edge.id, type: 'arrow', ...start, ...shape, points, roundness: null, label,
+    const elbowed = saved?.kind === 'elbow';
+    const onSide = (point: Point, box: Bounds) => point.x < box.x || point.x > box.x + box.width;
+    const arrow: Skeleton & Pick<ExcalidrawArrowElement, 'elbowed'> = { id: edge.id, type: 'arrow', ...start, ...shape, label, elbowed,
+      points: elbowed ? elbowPoints(points, onSide(start, a), onSide(end, b)) : points,
+      roundness: saved?.kind === 'curved' ? { type: 2 } : null,
       start: { id: edge.from.id }, end: { id: edge.to.id }, startArrowhead: edge.heads[0], endArrowhead: edge.heads[1],
-      strokeStyle: edge.dashed ? 'dashed' : 'solid', ...transitionStyles.get(edge.id), locked: !edge.write });
+      strokeStyle: edge.dashed ? 'dashed' : 'solid', ...transitionStyles.get(edge.id), locked: !edge.write };
+    connectors.push(arrow);
     if (edge.cardinalities) for (const [index, endpoint] of [start, end].entries()) {
       const direction = index === 0 ? 1 : -1;
       const x = endpoint.x + (loop ? 8 : direction * dx / Math.hypot(dx, dy) * 28) - 13;
@@ -463,26 +581,41 @@ function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map
   return [...elements, ...connectors, ...foreground];
 }
 
-/** Source-preserving projection for state and entity relationship diagrams. */
-export function readGraphDiagram(source: string, lines: string[], header: number, state: boolean) {
-  const graph = parseGraph(lines, header, state);
+/** Source-preserving projection for editable graph diagrams. */
+export function readGraphDiagram(source: string, lines: string[], header: number, type: GraphType) {
+  const state = type === 'state';
+  const graph = parseGraph(lines, header, type);
   if (!graph) return;
   const positions = new Map<string, Point>();
   const palette = new Map<string, Paint>();
   const formatting = new Map<string, number>();
   const nativeStyles = new Map<string, number>();
   const transitionStyles = new Map<string, ConnectorStyle>();
-  // Keep the style next to its transition, not keyed to a source line number.
+  const routes = new Map<string, SavedRoute>();
+  // Statement-owned formatting: optional stroke style, then optional scene-space bends.
   for (const edge of graph.edges) {
     if (!edge.write) continue;
     const style = readConnectorStyle(lines[edge.line + 1]);
     if (style) transitionStyles.set(edge.id, style);
+    const line = edge.line + (style ? 2 : 1);
+    const payload = lines[line]?.trim().match(/^%% graph-route (.*)$/);
+    if (payload) {
+      let data: unknown;
+      try { data = JSON.parse(payload[1]); } catch { return; }
+      if (Array.isArray(data) && data.every(isWaypoint)) routes.set(edge.id, { line, kind: 'sharp', bends: data });
+      else if (type === 'requirement' && data && typeof data === 'object' && 'kind' in data &&
+        (data.kind === 'curved' || data.kind === 'elbow')) {
+        const bends = 'bends' in data ? data.bends : undefined;
+        if (bends !== undefined && (!Array.isArray(bends) || !bends.every(isWaypoint))) return;
+        routes.set(edge.id, { line, kind: data.kind, bends });
+      } else return;
+    }
   }
   for (let line = header + 1; line < lines.length; line++) {
     const native = lines[line].trim().match(/^%% graph-native-style (\S+)$/);
     const node = native && graph.nodes.get(native[1]);
-    if (node && lines[line + 1]?.trim().startsWith(`style ${node.reference} `)) {
-      const paint = paintOf(lines[line + 1].trim().slice(`style ${node.reference} `.length));
+    if (node && lines[line + 1]?.trim().startsWith(`style ${styleTarget(node)} `)) {
+      const paint = paintOf(lines[line + 1].trim().slice(`style ${styleTarget(node)} `.length));
       nativeStyles.set(node.id, line);
       palette.set(node.id, paint);
       continue;
@@ -503,12 +636,13 @@ export function readGraphDiagram(source: string, lines: string[], header: number
     }
     formatting.set(`${directive} ${id}`, line);
   }
-  const elements = graphElements(graph, positions, palette, state, transitionStyles);
+  const elements = graphElements(graph, positions, palette, type, transitionStyles, routes);
   return {
     elements,
     resetFormatting: () => {
       const owned = new Set([...formatting.values(), ...[...nativeStyles.values()].flatMap((line) => [line, line + 1])]);
       for (const edge of graph.edges) if (transitionStyles.has(edge.id)) owned.add(edge.line + 1);
+      for (const { line } of routes.values()) owned.add(line);
       return lines.filter((_, line) => !owned.has(line)).join('\n');
     },
     update(before: readonly GraphCanvasElement[], after: readonly GraphCanvasElement[]) {
@@ -557,7 +691,8 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         if (deleted.has(node)) continue;
         const previous = base.get(node.id);
         const next = live.get(node.id);
-        const label = updateLabel(node.label, `${node.id}:label`, node.name);
+        const label = updateLabel(node.label, `${node.id}:label`, labelOf(node));
+        if (label !== undefined && node.requirementKind) throw new Error('Change declaration names and kinds in Mermaid source.');
         if (label !== undefined && label) {
           valid(label, true);
           if (node.label) output[node.label.line] = node.label.write(label);
@@ -570,8 +705,8 @@ export function readGraphDiagram(source: string, lines: string[], header: number
           if (base.has(fieldId(field)) && !live.has(fieldId(field))) removed.add(field.line);
           const value = updateLabel(field, fieldId(field), '');
           if (value !== undefined) {
-            if (!state && !attribute.test(value)) throw new Error('Use an entity attribute in the form "type name [PK, FK, UK] [comment]".');
-            output[field.line] = field.write(valid(value, false));
+            if (type === 'entity' && !attribute.test(value)) throw new Error('Use an entity attribute in the form "type name [PK, FK, UK] [comment]".');
+            output[field.line] = field.write(node.requirementKind ? value : valid(value, false));
           }
         }
         if (!previous || !next) continue;
@@ -598,17 +733,20 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         }
         if (changed) {
           const value = Object.entries(paint).map(([key, value]) => `${key}:${value}`).join(',');
-          if (!state && !node.child && /^[\w-]+$/.test(node.reference)) {
+          if (node.requirementKind || (!state && !node.child && /^[\w-]+$/.test(node.reference))) {
             const existing = nativeStyles.get(node.id);
-            if (existing === undefined) insert(graph.root.end, `%% graph-native-style ${node.id}\nstyle ${node.reference} ${value}`);
-            else output[existing + 1] = `style ${node.reference} ${value}`;
+            const style = `style ${styleTarget(node)} ${value}`;
+            if (existing === undefined) insert(graph.root.end, `%% graph-native-style ${node.id}\n${style}`);
+            else output[existing + 1] = style;
           } else save('graph-style', node.id, value);
         }
       }
       for (const edge of graph.edges) {
+        const route = routes.get(edge.id);
         if (deleted.has(edge.from) || deleted.has(edge.to) || (edge.write && base.has(edge.id) && !live.has(edge.id))) {
           removed.add(edge.line);
           if (transitionStyles.has(edge.id)) removed.add(edge.line + 1);
+          if (route) removed.add(route.line);
           if (!edge.from.declarations.length && !deleted.has(edge.from) && edge.from.kind === 'box') insert(edge.line, `${lineIndent(lines[edge.line])}${edge.from.reference}`);
           if (!edge.to.declarations.length && !deleted.has(edge.to) && edge.to.kind === 'box' && edge.from !== edge.to) insert(edge.line, `${lineIndent(lines[edge.line])}${edge.to.reference}`);
           continue;
@@ -618,24 +756,53 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         const previous = base.get(edge.id);
         const saved = transitionStyles.get(edge.id);
         const style = changedConnectorStyle(previous, current, saved);
+        const newFormatting: string[] = [];
         if (style) {
           const comment = writeConnectorStyle(lines[edge.line], style);
           if (saved) output[edge.line + 1] = comment;
-          else insert(edge.line + 1, comment);
+          else newFormatting.push(comment);
         }
         const attached = current?.boundElements?.find(({ type }) => type === 'text')?.id;
         const value = updateLabel(edge.label, attached ?? `${edge.id}:label`, '');
         const hasDeletedLabel = base.has(`${edge.id}:label`) && !live.has(`${edge.id}:label`) && !attached;
-        const endpoint = (binding: GraphCanvasElement['startBinding'], before: GraphCanvasElement['startBinding'], fallback: Node) => {
+        const movedNode = (node: Node) => base.get(node.id)?.x !== live.get(node.id)?.x || base.get(node.id)?.y !== live.get(node.id)?.y;
+        const oldBends = previous?.points?.slice(1, -1).map((p) => scenePoint(previous, p));
+        const bends = current?.points?.slice(1, -1).map((p) => scenePoint(current, p));
+        const editedBends = bends && oldBends && !movedNode(edge.from) && !movedNode(edge.to) &&
+          (bends.length !== oldBends.length || bends.some((p, i) => !samePoint(p, oldBends[i])));
+        const kind = type === 'requirement' && current ? arrowKind(current) : 'sharp';
+        const changedKind = type === 'requirement' && previous && current && kind !== arrowKind(previous);
+        if (editedBends || changedKind) {
+          const waypoints = changedKind && (kind === 'elbow' || route?.kind === 'elbow') ? undefined
+            : editedBends ? bends : route?.bends;
+          const comment = routeComment(kind, waypoints);
+          if (comment) {
+            const text = `${lineIndent(lines[edge.line])}${comment}`;
+            if (route) output[route.line] = text;
+            else newFormatting.push(text);
+          } else if (route) removed.add(route.line);
+        }
+        if (newFormatting.length) {
+          const line = edge.line + (saved ? 2 : 1);
+          inserted.set(line, [...newFormatting, ...inserted.get(line) ?? []]);
+        }
+        const endpoint = (side: 'startBinding' | 'endBinding', fallback: Node) => {
+          const binding = current?.[side];
+          const before = previous?.[side];
           if (binding === undefined || binding?.elementId === before?.elementId) return fallback;
+          // A midpoint drag can rebind an untouched endpoint to the box's title or clear its binding.
+          const index = side === 'startBinding' ? 0 : -1;
+          const a = previous?.points?.at(index);
+          const b = current?.points?.at(index);
+          if (editedBends && previous && current && a && b && samePoint(scenePoint(previous, a), scenePoint(current, b))) return fallback;
           const target = binding && graph.nodes.get(binding.elementId);
           if (!target || target.kind === 'note' || deleted.has(target)) throw new Error('Connect both ends to diagram nodes.');
           if (state && (target.scope !== fallback.scope || target.region !== fallback.region)) throw new Error('Connect states within the same region.');
           return target;
         };
-        const from = endpoint(current?.startBinding, previous?.startBinding, edge.from);
-        const to = endpoint(current?.endBinding, previous?.endBinding, edge.to);
-        const heads: Edge['heads'] = state ? edge.heads : [current?.startArrowhead ?? edge.heads[0], current?.endArrowhead ?? edge.heads[1]];
+        const from = endpoint('startBinding', edge.from);
+        const to = endpoint('endBinding', edge.to);
+        const heads: Edge['heads'] = type !== 'entity' ? edge.heads : [current?.startArrowhead ?? edge.heads[0], current?.endArrowhead ?? edge.heads[1]];
         const dashed = Boolean(edge.dashed);
         const label = value ?? (hasDeletedLabel ? (state ? '' : 'relates to') : edge.label.text);
         if (label !== edge.label.text || from !== edge.from || to !== edge.to ||
@@ -667,15 +834,19 @@ export function readGraphDiagram(source: string, lines: string[], header: number
               element.x >= box.x && element.x < box.x + box.width &&
               element.y >= box.y && element.y < box.y + box.height;
           });
-          if (!owner) throw new Error('Place attribute text inside an entity box.');
-          const value = element.originalText.trim();
-          if (!attribute.test(value)) throw new Error('Use an entity attribute in the form "type name [PK, FK, UK] [comment]".');
+          if (!owner) throw new Error(type === 'requirement' ? 'Place field text inside a requirement or element box.' : 'Place attribute text inside an entity box.');
+          let value = element.originalText.trim();
+          if (owner.requirementKind) {
+            const field = requirementField(owner.requirementKind, value, true);
+            if (!field) throw new Error(`Use a valid ${owner.requirementKind} field.`);
+            value = field.source;
+          } else if (!attribute.test(value)) throw new Error('Use an entity attribute in the form "type name [PK, FK, UK] [comment]".');
           newFields.set(owner, [...newFields.get(owner) ?? [], value]);
         }
         for (const [owner, fields] of newFields) {
-          if (owner.attributeBlockEnd !== undefined) {
-            const indent = `${lineIndent(lines[owner.attributeBlockEnd])}    `;
-            for (const value of fields) insert(owner.attributeBlockEnd, `${indent}${value}`);
+          if (owner.fieldBlockEnd !== undefined) {
+            const indent = `${lineIndent(lines[owner.fieldBlockEnd])}    `;
+            for (const value of fields) insert(owner.fieldBlockEnd, `${indent}${value}`);
           } else {
             const indent = indentFor(owner.scope);
             insert(owner.scope.end, [`${indent}${owner.reference} {`, ...fields.map((value) => `${indent}    ${value}`), `${indent}}`].join('\n'));
@@ -685,15 +856,15 @@ export function readGraphDiagram(source: string, lines: string[], header: number
       for (const element of live.values()) {
         if (base.has(element.id) || element.type !== 'rectangle') continue;
         let index = 1;
-        const prefix = state ? 'State' : 'Entity';
+        const prefix = state ? 'State' : type === 'requirement' ? 'Requirement' : 'Entity';
         while (ids.has(`${prefix}${index}`)) index++;
         const reference = `${prefix}${index}`;
         ids.add(reference);
         const scope = containing(element) ?? graph.root;
         const region = scope.regions.length - 1;
         created.set(element.id, { reference, scope, region });
-        insert(scope.regionEnds[region], `${indentFor(scope)}${reference}`);
-        const id = state ? `state:${scope.key}/${region}/${reference}` : `entity:${reference}`;
+        insert(scope.regionEnds[region], type === 'requirement' ? `requirement ${reference} {\n    id: ${reference}\n    text: "New requirement"\n}` : `${indentFor(scope)}${reference}`);
+        const id = state ? `state:${scope.key}/${region}/${reference}` : `${type}:${reference}`;
         save('graph-layout', id, `${Math.round(element.x)} ${Math.round(element.y)}`);
       }
       const resolve = (id?: string) => id ? graph.nodes.get(id) ?? created.get(id) : undefined;
@@ -709,6 +880,13 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         const label = labelId ? live.get(labelId)?.originalText?.trim() : undefined;
         const indent = state ? indentFor(from.scope) : '';
         const value = label ? valid(label, !state) : '';
+        if (type === 'requirement') {
+          insert(graph.root.end, writeRequirementRelationship(from.reference, value || 'traces', to.reference));
+          const bends = element.points?.slice(1, -1).map((point) => scenePoint(element, point));
+          const comment = routeComment(arrowKind(element), bends?.length ? bends : undefined);
+          if (comment) insert(graph.root.end, comment);
+          continue;
+        }
         insert(state ? from.scope.regionEnds[from.region] : graph.root.end, state
           ? `${indent}${from.reference} --> ${to.reference}${value ? `: ${value}` : ''}`
           : `${from.reference} ${cardinality(element.startArrowhead ?? null, true)}${element.strokeStyle === 'dashed' ? '..' : '--'}${cardinality(element.endArrowhead ?? null, false)} ${to.reference} : "${value || 'relates to'}"`);
@@ -716,7 +894,7 @@ export function readGraphDiagram(source: string, lines: string[], header: number
       const result = output.flatMap((line, index) => [...inserted.get(index) ?? [], ...removed.has(index) ? [] : [line]]);
       result.push(...inserted.get(lines.length) ?? []);
       const updated = result.join('\n');
-      if (updated !== source && !parseGraph(result, header, state)) throw new Error('This edit would leave the supported Mermaid syntax.');
+      if (updated !== source && !parseGraph(updated.split('\n'), header, type)) throw new Error('This edit would leave the supported Mermaid syntax.');
       return updated;
     },
   };
