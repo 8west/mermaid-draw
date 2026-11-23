@@ -14,7 +14,7 @@ Edit Mermaid diagrams on an Excalidraw canvas without leaving the editor.
 | Diagram | Canvas support |
 | --- | --- |
 | Flowchart | Move and resize nodes, edit labels and relationships, and change node styling. |
-| Sequence (partial) | Edit aliases, `->>` and `-->>` message labels, and single-line notes. Change colors and save exact drag positions. Dragging past another row changes source order; participant reordering requires all participants to be explicitly declared. |
+| Sequence (partial) | Edit aliases, `->>` and `-->>` message labels, and single-line notes. Change colors and save exact drag positions. Dragging past another row changes source order; participant reordering requires all participants to be explicitly declared. Activations (`activate`/`deactivate`, `+`/`-`) draw read-only bars and follow their message. |
 | Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes. Move class boxes and change fill, outline, and text colors. Relationships follow class moves; their operators and multiplicities are preserved. |
 | State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Includes composite states, concurrent regions, notes, and start/end markers. |
 | Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Includes nested subgraphs. |

@@ -97,3 +97,28 @@ test('sequence position and color survive reopening and can be reset', { timeout
     await browser.close();
   }
 });
+
+test('sequence activations stay editable and survive a message label edit', { timeout: 20_000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
+    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(examplePath('sequence'));
+    await page.getByRole('tab', { name: 'Activations', exact: true }).click();
+    const canvas = page.getByRole('tabpanel').locator('.excalidraw');
+    await canvas.waitFor();
+    await page.locator('button:not(:disabled)').and(page.getByRole('button', { name: 'Download', exact: true })).waitFor();
+    const edit = canvas.locator('textarea:visible');
+    await page.mouse.dblclick(640, 476);
+    await edit.waitFor({ timeout: 2000 });
+    assert.equal(await edit.inputValue(), 'Token');
+    await edit.fill('Access token');
+    await page.keyboard.press('Escape');
+    await edit.waitFor({ state: 'hidden' });
+    await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
+    const source = await page.getByRole('textbox', { name: 'Document source' }).inputValue();
+    assert.match(source, /C->>S: Login\s+activate S\s+S-->>C: Access token\s+deactivate S\s+C->>\+S: Fetch\s+S-->>-C: Data/);
+  } finally {
+    await browser.close();
+  }
+});

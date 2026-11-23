@@ -5,6 +5,16 @@ import { openDocument, resetDiagramFormatting } from '../../packages/mermaid_dra
 import { readMappedDiagram } from '../../packages/mermaid_draw_core/src/mappedDiagram.ts';
 import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 
+function sceneOf(mapping: NonNullable<ReturnType<typeof readMappedDiagram>>) {
+  return mapping.elements.flatMap((element) => {
+    assert.ok(element.id);
+    const { x, y } = element;
+    const entry = { id: element.id, x, y, originalText: element.type === 'text' ? element.text : undefined };
+    const label = 'label' in element ? element.label : undefined;
+    return label?.id ? [entry, { id: label.id, x, y, originalText: label.text }] : [entry];
+  });
+}
+
 function fixture(type: string, title: string) {
   const path = examplePath(type);
   const original = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
@@ -13,14 +23,7 @@ function fixture(type: string, title: string) {
   assert.equal(diagram.editable, true);
   const mapping = readMappedDiagram(diagram.source);
   assert.ok(mapping);
-  const scene = mapping.elements.flatMap((element) => {
-    assert.ok(element.id);
-    const { x, y } = element;
-    const entry = { id: element.id, x, y, originalText: element.type === 'text' ? element.text : undefined };
-    const label = 'label' in element ? element.label : undefined;
-    return label?.id ? [entry, { id: label.id, x, y, originalText: label.text }] : [entry];
-  });
-  return { document, original, diagram, mapping, scene };
+  return { document, original, diagram, mapping, scene: sceneOf(mapping) };
 }
 
 test('sequence canvas edits preserve IDs and operators, and reorder by source statement rather than label', () => {
@@ -59,6 +62,76 @@ test('deleting one identically labeled sequence message preserves the other and 
   }));
   const after = before.map((element) => ({ ...element, isDeleted: element.id === arrows[0].id }));
   assert.equal(mapping.update(before, after), source.replace('A->>B: Ping\n%% sequence-style row stroke:#e03131\n', ''));
+});
+
+function activationBars(source: string) {
+  const mapping = readMappedDiagram(source);
+  assert.ok(mapping, 'activations keep the sequence diagram editable');
+  const arrows = mapping.elements.filter(({ type }) => type === 'arrow');
+  const lifeline = (id: string) => mapping.elements.find((element) => element.id === `participant:${id}:lifeline`)!;
+  const bars = mapping.elements.filter(({ id }) => id?.startsWith('activation:'));
+  return { mapping, arrows, bars, lifeline };
+}
+
+test('explicit activate/deactivate draw a bar on the lifeline from the preceding message to the deactivating one', () => {
+  const { arrows, bars, lifeline } = activationBars(
+    'sequenceDiagram\nparticipant A\nparticipant B\nA->>B: Request\nactivate B\nB-->>A: Response\ndeactivate B\n');
+  assert.equal(bars.length, 1);
+  const [bar] = bars;
+  assert.ok(bar.type === 'rectangle');
+  assert.equal(bar.x + bar.width / 2, lifeline('B').x);
+  assert.equal(bar.y, arrows[0].y);
+  assert.equal(bar.y + bar.height, arrows[1].y);
+});
+
+test('+/- shorthand draws the same bar: + opens on the receiver, - closes on the sender', () => {
+  const { arrows, bars, lifeline } = activationBars(
+    'sequenceDiagram\nparticipant A\nparticipant B\nA->>+B: Request\nB-->>-A: Response\n');
+  assert.equal(bars.length, 1);
+  const [bar] = bars;
+  assert.ok(bar.type === 'rectangle');
+  assert.equal(bar.x + bar.width / 2, lifeline('B').x);
+  assert.equal(bar.y, arrows[0].y);
+  assert.equal(bar.y + bar.height, arrows[1].y);
+});
+
+test('nested activations of one participant stack outward and close innermost first', () => {
+  const { arrows, bars } = activationBars(
+    'sequenceDiagram\nparticipant A\nparticipant B\nA->>+B: One\nA->>+B: Two\nB-->>-A: Three\nB-->>-A: Four\n');
+  assert.equal(bars.length, 2);
+  const [outer, inner] = bars;
+  assert.ok(outer.type === 'rectangle' && inner.type === 'rectangle');
+  assert.deepEqual([outer.y, outer.y + outer.height], [arrows[0].y, arrows[3].y]);
+  assert.deepEqual([inner.y, inner.y + inner.height], [arrows[1].y, arrows[2].y]);
+  assert.ok(inner.x > outer.x, 'inner bar is offset to the right');
+});
+
+test('activations that cannot be resolved keep the whole sequence diagram read-only', () => {
+  for (const body of ['A->>B: Hi\ndeactivate B', 'activate B\nA->>B: Hi', 'A->>B: Hi\nB-->>-A: Bye']) {
+    assert.equal(readMappedDiagram(`sequenceDiagram\nparticipant A\nparticipant B\n${body}\n`), undefined, body);
+  }
+});
+
+test('reordering a message carries its activate/deactivate lines with it', () => {
+  const source = 'sequenceDiagram\nparticipant A\nparticipant B\nA->>B: Request\nactivate B\nA->>B: Log\nB-->>A: Response\ndeactivate B\n';
+  const mapping = readMappedDiagram(source)!;
+  const [, log, response] = mapping.elements.filter(({ type }) => type === 'arrow');
+  const before = sceneOf(mapping);
+  const after = before.map((element) => element.id === log.id ? { ...element, y: response.y + 20 } : element);
+  const statements = mapping.update(before, after).split('\n').filter((line) => line && !line.trimStart().startsWith('%%'));
+  assert.deepEqual(statements, ['sequenceDiagram', 'participant A', 'participant B', 'A->>B: Request', 'activate B',
+    'B-->>A: Response', 'deactivate B', 'A->>B: Log']);
+});
+
+test('label edits keep the +/- markers, and a reorder that unbalances activations is rejected', () => {
+  const source = 'sequenceDiagram\nparticipant A\nparticipant B\nA->>+B: Request\nB-->>-A: Response\n';
+  const mapping = readMappedDiagram(source)!;
+  const [request, response] = mapping.elements.filter(({ type }) => type === 'arrow');
+  const before = sceneOf(mapping);
+  const relabeled = before.map((element) => element.id === `${request.id}:label` ? { ...element, originalText: 'Ping' } : element);
+  assert.equal(mapping.update(before, relabeled), source.replace('Request', 'Ping'));
+  const reordered = before.map((element) => element.id === response.id ? { ...element, y: request.y - 20 } : element);
+  assert.throws(() => mapping.update(before, reordered), /supported Mermaid syntax/);
 });
 
 test('sequence row colors and exact positions follow the statement when reordered and reopened', () => {

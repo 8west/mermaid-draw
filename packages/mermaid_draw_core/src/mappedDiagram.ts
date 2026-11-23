@@ -13,7 +13,8 @@ type CanvasElement = Point & Colors & ConnectorAppearance & {
 type DiagramColors = { fill?: string; stroke?: string; color?: string };
 type Statement = { line: number; id: string; text: string };
 type Participant = Statement & { actor: boolean };
-type SequenceRow = Statement & { from: string; to: string; operator: string; note?: string };
+type Activation = { line: number; kind: 'activate' | 'deactivate'; id: string };
+type SequenceRow = Statement & { from: string; to: string; operator: string; note?: string; activations?: Activation[] };
 type ClassBox = Statement & { members: Statement[] };
 type Relationship = SequenceRow & { left?: string; right?: string };
 type FillStyle = 'solid' | 'hachure' | 'cross-hatch' | 'zigzag';
@@ -65,7 +66,8 @@ function readNoteFormatting(line?: string): NoteFormatting | undefined {
 
 const identifier = '[A-Za-z_][\\w-]*';
 const participantPattern = new RegExp(`^(participant|actor)\\s+(${identifier})(?:\\s+as\\s+(.+))?$`);
-const messagePattern = new RegExp(`^(${identifier}?)[ \\t]*(-->>|->>)[ \\t]*(${identifier})[ \\t]*:[ \\t]*(.+)$`);
+const messagePattern = new RegExp(`^(${identifier}?)[ \\t]*(-->>|->>)([+-]?)[ \\t]*(${identifier})[ \\t]*:[ \\t]*(.+)$`);
+const activationPattern = new RegExp(`^(activate|deactivate)\\s+(${identifier})$`);
 const notePattern = new RegExp(`^Note\\s+(left of|right of|over)\\s+(${identifier})(?:\\s*,\\s*(${identifier}))?\\s*:\\s*(.+)$`, 'i');
 const classPattern = new RegExp(`^class\\s+(${identifier})(?:\\["([^"\\]]+)"\\])?\\s*(\\{)?$`);
 const classNotePattern = new RegExp(`^note\\s+(?:for\\s+(${identifier})\\s+)?"([^"]+)"$`);
@@ -250,6 +252,14 @@ function readSequence(source: string, lines: string[], header: number) {
     }
     attached = undefined;
     if (!body || body.startsWith('%%')) continue;
+    const activation = body.match(activationPattern);
+    if (activation) {
+      const last = rows.at(-1);
+      if (!last) return undefined;
+      implicit(activation[2]);
+      (last.activations ??= []).push({ line, kind: activation[1] as Activation['kind'], id: activation[2] });
+      continue;
+    }
     const person = body.match(participantPattern);
     if (person && !rows.length && !people.has(person[2]) && (!person[3] || simpleText(person[3]))) {
       const [, kind, id, alias] = person;
@@ -259,11 +269,13 @@ function readSequence(source: string, lines: string[], header: number) {
     }
     const message = body.match(messagePattern);
     const note = body.match(notePattern);
-    if (message && simpleText(message[4])) {
-      const [, from, operator, to, text] = message;
+    if (message && simpleText(message[5])) {
+      const [, from, operator, marker, to, text] = message;
       implicit(from);
       implicit(to);
-      rows.push({ line, id: `row:${line}`, from, to, operator, text });
+      const row: SequenceRow = { line, id: `row:${line}`, from, to, operator, text };
+      if (marker) row.activations = [{ line, kind: marker === '+' ? 'activate' : 'deactivate', id: marker === '+' ? to : from }];
+      rows.push(row);
     } else if (note && simpleText(note[4]) && (!note[3] || note[1].toLowerCase() === 'over')) {
       const [, direction, from, to = from, text] = note;
       implicit(from);
@@ -299,6 +311,29 @@ function readSequence(source: string, lines: string[], header: number) {
       { dashed: true, locked: true }), ...(paint.strokeColor && { strokeColor: paint.strokeColor }) });
     elements.push({ ...box(key, x, y, widthOf(name), 48), groupIds: [], locked: line < 0, ...paint,
       label: { ...paint.label, locked: line < 0 }, ...(actor ? { roundness: { type: 3 } } : {}) });
+  }
+  const rowY = (index: number) => positions.get(rows[index].id)?.y ?? defaultRowY(index);
+  const open = new Map<string, number[]>();
+  const bars: { id: string; person: string; depth: number; from: number; to?: number }[] = [];
+  for (const [index, { activations = [] }] of rows.entries()) {
+    for (const { kind, id } of activations) {
+      const stack = open.get(id) ?? [];
+      open.set(id, stack);
+      if (kind === 'activate') {
+        stack.push(bars.length);
+        bars.push({ id: `activation:${bars.length}`, person: id, depth: stack.length - 1, from: index });
+      } else {
+        const bar = stack.pop();
+        if (bar === undefined) return undefined;
+        bars[bar].to = index;
+      }
+    }
+  }
+  for (const { id, person, depth, from, to } of bars) {
+    const top = rowY(from);
+    const { center } = peopleGeometry.get(person)!;
+    elements.push({ ...box(id, center - 6 + depth * 6, top, 12, Math.max((to === undefined ? bottom : rowY(to)) - top, 24)),
+      groupIds: [], locked: true, backgroundColor: '#e9ecef', fillStyle: 'solid' });
   }
   rows.forEach(({ id, from, to, note, operator, text: label }, index) => {
     const { x, y } = positions.get(id) ?? { x: 0, y: defaultRowY(index) };
@@ -372,7 +407,8 @@ function readSequence(source: string, lines: string[], header: number) {
     const sortedRows = keptRows.some(({ id }) => edit.movement(id, 'y'))
       ? [...keptRows].sort((a, b) => rowGeometry.get(a.id)!.y - rowGeometry.get(b.id)!.y)
       : keptRows;
-    const removed = new Set(formattingLines);
+    const removed = new Set([...formattingLines, ...rows.flatMap(({ line, activations = [] }) =>
+      activations.filter((activation) => activation.line !== line).map((activation) => activation.line))]);
     let cursor = 0;
     for (const row of rows) {
       if (edit.removed(row.id)) {
@@ -381,9 +417,12 @@ function readSequence(source: string, lines: string[], header: number) {
       }
       const next = sortedRows[cursor];
       const label = edit.label(next.id, next.text);
-      output[row.line] = withFormatting(replaceText(lines[next.line], next.text, label), next.id, 'row', rowGeometry.get(next.id)!,
+      const statement = withFormatting(replaceText(lines[next.line], next.text, label), next.id, 'row', rowGeometry.get(next.id)!,
         Boolean(edit.movement(next.id, 'x') || edit.movement(next.id, 'y') ||
           (!positions.has(next.id) && next !== keptRows[cursor])));
+      // activate/deactivate statements belong to the message they follow.
+      const following = (next.activations ?? []).filter(({ line }) => line !== next.line).map(({ line }) => lines[line]);
+      output[row.line] = [statement, ...following].join('\n');
       cursor++;
     }
     return output.filter((_, line) => !removed.has(line)).join('\n');
