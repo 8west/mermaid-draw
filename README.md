@@ -23,15 +23,18 @@ Open a standalone Mermaid file (`.mermaid`) or a Markdown document (`.md`, `.mar
 | Flowchart | Move and resize nodes, edit labels and relationships, and change node styling. |
 | Sequence (partial) | Edit aliases, message labels (`->>` and `-->>`), and single-line notes. Change colors and drag explicit participants, actors, messages, and notes to exact positions. Dragging past another row changes source order; participant reordering requires all participants to be explicitly declared. Activations (`activate`/`deactivate` and `+`/`-` shorthand) draw read-only bars and move with their message; creating or editing them is source-only. Control fragments are not supported. |
 | Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes (including `<br>` line breaks). Move class boxes and change fill, outline, and text colors. Relationship lines, labels, and multiplicities follow class moves; their UML operators and multiplicities are preserved in source. Add classes or change relationship structure in source. |
-| State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Supports composite states, concurrent regions, notes, and start/end markers. Create or reorganize regions in source. |
-| Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Add attributes by placing text inside an entity. Supports nested subgraphs; create subgraphs in source. |
+| State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Draw a dashed rectangle for a composite state and a dashed line inside it for a concurrent region. Reorganizing existing states between regions remains source-only. |
+| Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Add attributes by placing text inside an entity. Draw a dashed rectangle for a nested subgraph. |
 | Requirement (partial) | Edit requirement and element fields, move and color boxes, and edit or reconnect all seven relationship types. Draw a rectangle to add a requirement; new arrows default to `traces`. Rename declarations, change their kind, or create elements in source. |
+| C4 (partial) | Edit labels, technology/type, descriptions, relationships, positions, and styling in Context, Container, Component, Dynamic, and Deployment diagrams. Draw rectangles for new elements, dashed rectangles for boundaries, and arrows for `Rel` relationships. Unsupported C4 calls remain read-only. |
 
-For supported class, sequence, state, entity relationship, and requirement connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments. These visual overrides do not change relationship or message semantics.
+For supported class, sequence, state, entity relationship, requirement, and C4 connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments. These visual overrides do not change relationship or message semantics.
 
 In state, entity relationship, and requirement diagrams, drag a connector's middle handle to add a bend. Bends are saved with the relationship and survive download and reopen. **Reset styles** restores automatic routing without changing the relationship.
 
 Requirement connectors also support **Sharp**, **Curved**, and **Elbow**. Curved rounds an existing bend; a two-point connector is still straight. Elbow routes in right angles. Neither changes the Mermaid relationship type.
+
+C4 descriptions wrap inside their nodes. Text in person ovals starts centered and can be aligned left, center, or right. Node styling includes fill and stroke colors and patterns, stroke width, roughness, opacity, rounded corners where available, and text color, font, and size. The styling panel stays open after color changes. **Reset styles** clears the canvas overrides while keeping diagram content.
 
 Class notes support repeated moves, fill/stroke/text colors, fill pattern, stroke width/pattern, roughness, opacity, rounded corners, and font/alignment controls. Note formatting is stored in an adjacent `%% class-note` comment; reset preserves note text and class attachment. Resizing, rotation, note creation/deletion, and layer changes are not supported canvas operations.
 
@@ -60,19 +63,19 @@ Use Node.js 24 LTS and pnpm 12.21.0. From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm dev:web
+pnpm dev
 ```
 
 Open <http://127.0.0.1:5173/>.
 
-If Vite reports that a new workspace package export is missing, stop and restart `pnpm dev:web`, then reload the browser. Refreshing alone does not clear Vite's cached package exports.
+If Vite reports that a new workspace package export is missing, restart `pnpm dev`, then reload the browser to clear Vite's cached package exports.
 
-If port 5173 is already in use, stop the existing dev server or run `pnpm dev:web --port 5174` and open <http://127.0.0.1:5174/>.
+If port 5173 is already in use, stop the existing dev server or run `pnpm --filter mermaid-draw-web dev --port 5174` and open <http://127.0.0.1:5174/>.
 
 ## Test and build
 
 Open the test document for the diagram type you want to check:
-[flowchart](tests/diagrams/flowchart.md), [sequence](tests/diagrams/sequence.md), [class](tests/diagrams/class.md), [state](tests/diagrams/state.md), [entity relationship](tests/diagrams/entity-relationship.md), or [requirement](tests/diagrams/requirement.md).
+[flowchart](tests/diagrams/flowchart.md), [sequence](tests/diagrams/sequence.md), [class](tests/diagrams/class.md), [state](tests/diagrams/state.md), [entity relationship](tests/diagrams/entity-relationship.md), [requirement](tests/diagrams/requirement.md), or [C4](tests/diagrams/c4.md).
 
 The first diagram matches the linked Mermaid documentation. Each feature heading becomes a tab; later tabs cover other official examples or project-specific editing cases. The unit tests open every block, and the browser tests use these same documents for edits, downloads, and reopening.
 
@@ -83,14 +86,14 @@ pnpm build
 
 The production build type-checks the web app and writes `packages/mermaid_draw_web/dist/index.html`. It embeds scripts, styles, icons, and fonts. Open it directly in a modern browser to use it offline.
 
-After building, run the offline browser smoke test:
+After building, run the Playwright smoke suite:
 
 ```sh
 pnpm exec playwright install chromium
 pnpm test:smoke
 ```
 
-The test opens the built HTML with networking disabled, checks standalone Mermaid and exact Markdown export after edits in two tabs, and verifies recovery from invalid source. A second smoke test drives the VS Code webview with a mocked host and checks that canvas and text edits sync without echoes. See the [monorepo guide](./docs/MonoRepo.md) for package responsibilities.
+The suite covers offline editing and export, VS Code text synchronization, and diagram-specific editing. C4 browser tests check that consecutive color changes keep the styling panel open and that node styles survive download, reopen, and reset. On machines where Chromium startup times out under parallel load, run `node --test --test-concurrency=1 "tests/browser/*.smoke.ts"`. See the [monorepo guide](./docs/MonoRepo.md) for package responsibilities.
 
 ## VS Code extension
 

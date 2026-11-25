@@ -1,5 +1,6 @@
 import type { convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import type { Arrowhead, ExcalidrawElement, ExcalidrawTextElement } from '@excalidraw/excalidraw/element/types';
+import { readC4Diagram } from './c4Diagram.ts';
 import { readGraphDiagram } from './graphDiagram.ts';
 import { changedConnectorStyle, isConnectorStyle, readConnectorStyle, writeConnectorStyle, type ConnectorAppearance, type ConnectorStyle } from './connectorStyle.ts';
 
@@ -666,8 +667,10 @@ function readClasses(source: string, lines: string[], header: number) {
 
 /** Style-only edits preserve statement order even if comment insertion changes scene IDs. */
 export function mappedStyleOnly(before: string, after: string) {
-  const withoutStyles = (source: string) => source.split('\n').filter((line) =>
-    !/^\s*(?:%% (?:graph-transition-style|graph-route|graph-native-style|graph-style|sequence-style|class-note)\s|style\s)/.test(line)).join('\n');
+  const withoutStyles = (source: string) => source.split('\n').filter((line, index, lines) =>
+    !/^\s*(?:%% (?:graph-transition-style|graph-route|graph-native-style|graph-style|sequence-style|class-note|c4-text-align|c4-style)\s|style\s)/.test(line)
+    && !(/^\s*%% c4-native-style \S+\s*$/.test(lines[index - 1] ?? '') && /^\s*UpdateElementStyle\s*\(/.test(line))
+    && !(/^\s*%% c4-native-style \S+\s*$/.test(line) && /^\s*UpdateElementStyle\s*\(/.test(lines[index + 1] ?? ''))).join('\n');
   return before !== after && withoutStyles(before) === withoutStyles(after);
 }
 
@@ -676,6 +679,11 @@ export function readMappedDiagram(source: string): (ReturnType<typeof mapping> &
   const lines = source.split('\n');
   const header = diagramHeader(lines);
   switch (lines[header]?.trim()) {
+    case 'C4Context':
+    case 'C4Container':
+    case 'C4Component':
+    case 'C4Dynamic':
+    case 'C4Deployment': return readC4Diagram(source, lines, header);
     case 'sequenceDiagram': return readSequence(source, lines, header);
     case 'classDiagram': return readClasses(source, lines, header);
     case 'stateDiagram':

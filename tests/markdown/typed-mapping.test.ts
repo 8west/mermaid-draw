@@ -9,7 +9,8 @@ function sceneOf(mapping: NonNullable<ReturnType<typeof readMappedDiagram>>) {
   return mapping.elements.flatMap((element) => {
     assert.ok(element.id);
     const { x, y } = element;
-    const entry = { id: element.id, x, y, originalText: element.type === 'text' ? element.text : undefined };
+    const entry = { id: element.id, x, y,
+      originalText: element.type === 'text' ? element.originalText ?? element.text : undefined };
     const label = 'label' in element ? element.label : undefined;
     return label?.id ? [entry, { id: label.id, x, y, originalText: label.text }] : [entry];
   });
@@ -387,7 +388,7 @@ test('entity relationship edits preserve keys, subgraphs, cardinalities, and rel
 });
 
 test('adding a transition in a concurrent region writes it before that region closes', () => {
-  const { mapping, scene, diagram } = fixture('state', 'Concurrent regions');
+  const { mapping, scene } = fixture('state', 'Concurrent regions');
   const idle = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Idle')!;
   const running = mapping.elements.find((element) => 'label' in element && element.label?.text === 'Running')!;
   const next = mapping.update(scene, [...scene, {
@@ -395,6 +396,197 @@ test('adding a transition in a concurrent region writes it before that region cl
     startBinding: { elementId: running.id! }, endBinding: { elementId: idle.id! },
   }]);
   assert.match(next, /Running --> \[\*\]\n\s*Running --> Idle\n\s*--/);
+});
+
+test('dashed rectangles create composite states and dashed lines create concurrent regions', () => {
+  const source = 'stateDiagram-v2\n';
+  const mapped = readMappedDiagram(source)!;
+  const composite = mapped.update([], [{
+    id: 'drawn-composite', type: 'rectangle', strokeStyle: 'dashed', x: 20, y: 30, width: 320, height: 220,
+  }]);
+  assert.match(composite, /state Composite1 \{\n\}/);
+  assert.match(composite, /%% graph-layout state:\/0\/Composite1 20 30/);
+  assert.match(composite, /%% graph-size state:\/0\/Composite1 320 220/);
+
+  const reopened = readMappedDiagram(composite)!;
+  const compositeBox = reopened.elements.find((element) => element.id === 'state:/0/Composite1')!;
+  assert.deepEqual([compositeBox.width, compositeBox.height], [320, 220]);
+  const before = reopened.elements.map((element) => ({ ...element, id: element.id! }));
+  const withChild = reopened.update(before, [...before, {
+    id: 'drawn-child', type: 'rectangle', x: 60, y: 100, width: 125, height: 48,
+  }]);
+  assert.match(withChild, /state Composite1 \{\n\s+State1\n\}/);
+  const childMapping = readMappedDiagram(withChild)!;
+  const childScene = childMapping.elements.map((element) => ({ ...element, id: element.id! }));
+  const withRegion = childMapping.update(childScene, [...childScene, {
+    id: 'drawn-region', type: 'line', strokeStyle: 'dashed', x: 40, y: 180,
+    points: [[0, 0], [260, 0]] as const,
+  }]);
+  assert.match(withRegion, /state Composite1 \{\n\s+State1\n\s+--\n\}/);
+  const withRegionMapping = readMappedDiagram(withRegion)!;
+  const region = withRegionMapping.elements.find((element) => element.id?.endsWith(':region:0'));
+  assert.equal(region?.type, 'line');
+  const regionScene = withRegionMapping.elements.map((element) => ({ ...element, id: element.id! }));
+  const merged = withRegionMapping.update(regionScene, regionScene.filter(({ id }) => id !== region!.id));
+  assert.doesNotMatch(merged, /^\s*--$/m);
+  assert.ok(readMappedDiagram(merged));
+});
+
+test('a dashed rectangle creates a nested entity relationship subgraph', () => {
+  const source = 'erDiagram\n    CUSTOMER\n';
+  const mapped = readMappedDiagram(source)!;
+  const before = mapped.elements.map((element) => ({ ...element, id: element.id! }));
+  const updated = mapped.update(before, [...before, {
+    id: 'drawn-subgraph', type: 'rectangle', strokeStyle: 'dashed', x: 260, y: 20, width: 300, height: 180,
+  }]);
+  assert.match(updated, /subgraph Subgraph1 \["Subgraph1"\]\nend/);
+  assert.match(updated, /%% graph-layout entity:Subgraph1 260 20/);
+  assert.match(updated, /%% graph-size entity:Subgraph1 300 180/);
+  const reopened = readMappedDiagram(updated)!;
+  const group = reopened.elements.find((element) => element.id === 'entity:Subgraph1')!;
+  assert.deepEqual([group.width, group.height], [300, 180]);
+});
+
+test('C4 elements, boundaries, fields, relationships, layout and native styles round-trip', () => {
+  const { mapping, diagram } = fixture('c4', 'System context');
+  const before = mapping.elements.flatMap((element) => {
+    const item = { ...element, id: element.id! };
+    const label = 'label' in element ? element.label : undefined;
+    return label?.id ? [item, { id: label.id, x: element.x, y: element.y, originalText: label.text }] : [item];
+  });
+  const after = before.map((element) => {
+    if (element.id === 'c4:banking') return { ...element, x: element.x + 35, y: element.y + 20,
+      backgroundColor: '#d0ebff', strokeColor: '#1971c2' };
+    if (element.id === 'c4:banking:label') return { ...element, originalText: 'Online Banking', strokeColor: '#1864ab' };
+    if (element.id === 'c4:banking:description') return { ...element, originalText: 'Manages customer accounts' };
+    if (element.id === 'c4-relationship:8') return { ...element, strokeWidth: 4, strokeStyle: 'dashed' };
+    return element;
+  });
+  const updated = mapping.update(before, after);
+  assert.match(updated, /System\(banking, "Online Banking", "Manages customer accounts"\)/);
+  assert.match(updated, /%% c4-layout banking /);
+  assert.match(updated, /%% c4-native-style banking\nUpdateElementStyle\(banking,/);
+  assert.match(updated, /%% graph-transition-style /);
+  const reopened = readMappedDiagram(updated)!;
+  assert.equal(reopened.elements.find((element) => element.id === 'c4:banking:label')?.text, 'Online Banking');
+  assert.match(reopened.resetFormatting!(), /System\(banking, "Online Banking", "Manages customer accounts"\)/);
+  assert.doesNotMatch(reopened.resetFormatting!(), /c4-layout|c4-native-style|graph-transition-style/);
+  assert.equal(readMappedDiagram(diagram.source)?.elements.filter((element) => element.type === 'arrow').length, 2);
+});
+
+test('the Internet Banking System description wraps inside its box and preserves Mermaid text', () => {
+  const { diagram, mapping } = fixture('c4', 'Official system context');
+  const box = mapping.elements.find(({ id }) => id === 'c4:SystemAA')!;
+  const description = mapping.elements.find(({ id }) => id === 'c4:SystemAA:description');
+  assert.ok(description?.type === 'text');
+  const lines = description.text.split('\n');
+  assert.ok(lines.length > 1, 'the long description needs multiple lines');
+  assert.ok(lines.every((line) => line.length * 8.5 <= box.x + box.width! - description.x - 14),
+    'each line fits the inset box at 14px Cascadia');
+  assert.ok(description.y + lines.length * description.fontSize! * description.lineHeight! < box.y + box.height!);
+  const sourceText = 'Allows customers to view information about their bank accounts, and make payments.';
+  assert.equal(lines.join(' '), sourceText);
+  assert.equal(description.originalText, sourceText);
+
+  const canvas = sceneOf(mapping);
+  assert.equal(mapping.update(canvas, canvas), diagram.source);
+  const edit = 'Allows customers to review balances and make payments.';
+  const updated = mapping.update(canvas, canvas.map((element) => element.id === description.id
+    ? { ...element, originalText: edit }
+    : element));
+  assert.equal(updated, diagram.source.replace(sourceText, edit));
+});
+
+test('C4 oval text defaults to center and alignment overrides survive reopen and reset', () => {
+  const { diagram, mapping } = fixture('c4', 'System context');
+  const labelId = 'c4:customer:label';
+  const field = (scene: typeof mapping) => scene.elements.find((element) => element.type === 'text' && element.id === labelId)!;
+  const oval = mapping.elements.find(({ id }) => id === 'c4:customer')!;
+  assert.equal(field(mapping).textAlign, 'center');
+  assert.equal(field(mapping).x, oval.x + oval.width! / 2);
+  const before = mapping.elements.map((element) => ({ ...element, id: element.id! }));
+  const updated = mapping.update(before, before.map((element) => element.id === labelId
+    ? { ...element, textAlign: 'right' }
+    : element));
+  const reopened = readMappedDiagram(updated)!;
+  assert.equal(field(reopened).textAlign, 'right');
+  assert.ok(field(reopened).x > field(mapping).x);
+  assert.equal(reopened.resetFormatting!(), diagram.source);
+});
+
+test('the C4 banking relationships keep both BiRel arrowheads outside their nodes after a move', () => {
+  const { mapping } = fixture('c4', 'Official system context');
+  const bankingId = 'c4:SystemAA';
+  const before = sceneOf(mapping);
+  const moved = mapping.update(before, before.map((element) => element.id === bankingId
+    ? { ...element, x: element.x + 45, y: element.y + 35 }
+    : element));
+
+  for (const diagram of [mapping, readMappedDiagram(moved)!]) {
+    const uses = diagram.elements.filter((element) => element.type === 'arrow' && element.label?.text === 'Uses');
+    assert.equal(uses.length, 2);
+    for (const arrow of uses) {
+      assert.deepEqual([arrow.startArrowhead, arrow.endArrowhead], ['arrow', 'arrow']);
+      for (const [binding, point] of [[arrow.start, arrow.points?.[0]], [arrow.end, arrow.points?.at(-1)]] as const) {
+        assert.ok(point);
+        const box = diagram.elements.find(({ id }) => id === binding?.id)!;
+        const rx = box.width! / 2;
+        const ry = box.height! / 2;
+        const dx = Math.abs(arrow.x + point[0] - box.x - rx);
+        const dy = Math.abs(arrow.y + point[1] - box.y - ry);
+        assert.ok(box.type === 'ellipse' ? Math.hypot(dx / rx, dy / ry) > 1 : dx > rx || dy > ry,
+          `${box.id} should not cover its arrowhead`);
+      }
+    }
+  }
+});
+
+test('moving one nested C4 element keeps every other element fixed', () => {
+  const { mapping } = fixture('c4', 'Official system context');
+  const before = sceneOf(mapping);
+  const movedId = 'c4:customerD';
+  const updated = mapping.update(before, before.map((element) => element.id === movedId
+    ? { ...element, x: element.x + 60, y: element.y + 40 }
+    : element));
+  const reopened = readMappedDiagram(updated)!;
+  const positions = new Map(reopened.elements.map((element) => [element.id, [element.x, element.y]]));
+  for (const element of mapping.elements.filter((candidate) => candidate.type === 'rectangle' || candidate.type === 'ellipse')) {
+    const expected = element.id === movedId ? [element.x + 60, element.y + 40] : [element.x, element.y];
+    assert.deepEqual(positions.get(element.id), expected, `${element.id} moved unexpectedly`);
+  }
+});
+
+test('C4 canvas creation writes owned elements, boundaries and relationships', () => {
+  const source = 'C4Container\n';
+  const mapped = readMappedDiagram(source)!;
+  const created = mapped.update([], [
+    { id: 'box-a', type: 'rectangle', x: 10, y: 20, width: 180, height: 80 },
+    { id: 'box-b', type: 'rectangle', x: 300, y: 20, width: 180, height: 80 },
+    { id: 'link', type: 'arrow', x: 0, y: 0, startBinding: { elementId: 'box-a' }, endBinding: { elementId: 'box-b' } },
+  ]);
+  assert.match(created, /Container\(Container1, "Container1"\)/);
+  assert.match(created, /Container\(Container2, "Container2"\)/);
+  assert.match(created, /Rel\(Container1, Container2, "Uses"\)/);
+  assert.ok(readMappedDiagram(created));
+
+  const reopened = readMappedDiagram(created)!;
+  const before = reopened.elements.map((element) => ({ ...element, id: element.id! }));
+  const boundary = reopened.update(before, [...before, {
+    id: 'boundary', type: 'rectangle', strokeStyle: 'dashed', x: 600, y: 20, width: 280, height: 180,
+  }]);
+  assert.match(boundary, /Boundary\(Boundary1, "Boundary1"\) \{\n\s*\}/);
+  assert.ok(readMappedDiagram(boundary));
+});
+
+test('all legacy C4 headers accept common owned syntax and reject unknown calls', () => {
+  for (const source of [
+    'C4Context\nPerson_Ext(user, "User", $descr="External user")\nSystemDb(core, "Core", "Stores data")\nBiRel(user, core, "Uses")\n',
+    'C4Container\nContainer_Boundary(app, "Application") {\nContainer(web, "Web", "TypeScript", "UI")\n}\n',
+    'C4Component\nComponent(api, "API", "HTTP", "Handles requests")\nComponentDb(store, "Store", "SQL", "Persists data")\nRel_Back(api, store, "Reads")\n',
+    'C4Dynamic\nContainer(a, "A", "Web", "First")\nContainer(b, "B", "API", "Second")\nRelIndex(1, a, b, "Calls")\nUpdateRelStyle(a, b, $lineColor="red")\n',
+    'C4Deployment\nDeployment_Node(host, "Host", "Linux", "Production") {\nNode(runtime, "Runtime", "Node.js", "Process") {\nContainer(app, "App", "TypeScript", "Service")\n}\n}\n',
+  ]) assert.ok(readMappedDiagram(source), source.split('\n')[0]);
+  assert.equal(readMappedDiagram('C4Context\nAddElementTag("critical", $bgColor="red")\n'), undefined);
 });
 
 test('resetting entity formatting restores authored styles without reverting attribute edits', () => {

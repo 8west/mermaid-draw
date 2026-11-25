@@ -47,6 +47,133 @@ test('state and entity relationship examples open and accept new diagram nodes',
   }
 });
 
+test('C4 fields edit on canvas and survive source sync', { timeout: 20_000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page.setDefaultTimeout(4000);
+    await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
+    const file = examplePath('c4');
+    const original = readFileSync(file, 'utf8');
+    const source = exampleNamed(openDocument(file, original), 'System context').source;
+    const mapping = readMappedDiagram(source)!;
+    const label = mapping.elements.find((element) => element.id === 'c4:banking:label')!;
+    const boxes = mapping.elements.filter((element) => element.type === 'rectangle' || element.type === 'ellipse');
+    await page.getByLabel('Open Markdown or Mermaid file').setInputFiles(file);
+    await page.getByRole('tab', { name: 'System context', exact: true }).click();
+    const canvas = page.getByRole('tabpanel').locator('.excalidraw');
+    const bounds = await canvas.boundingBox();
+    assert.ok(bounds);
+    const left = Math.min(...boxes.map((element) => element.x));
+    const right = Math.max(...boxes.map((element) => element.x + element.width!));
+    const top = Math.min(...boxes.map((element) => element.y));
+    const bottom = Math.max(...boxes.map((element) => element.y + element.height!));
+    const x = bounds.x + bounds.width / 2 - (left + right) / 2 + label.x + 40;
+    const y = bounds.y + bounds.height / 2 - (top + bottom) / 2 + label.y + 10;
+    await page.mouse.dblclick(x, y);
+    await page.mouse.dblclick(x, y);
+    const edit = canvas.locator('textarea:visible');
+    await edit.fill('Online Banking');
+    await page.keyboard.press('Escape');
+    await edit.waitFor({ state: 'hidden' });
+    const customer = mapping.elements.find(({ id }) => id === 'c4:customer:label')!;
+    await page.mouse.click(bounds.x + bounds.width / 2 - (left + right) / 2 + customer.x,
+      bounds.y + bounds.height / 2 - (top + bottom) / 2 + customer.y + 10);
+    const align = canvas.getByRole('group', { name: 'Text align', exact: true });
+    await align.locator('[title="Right"]').click();
+    await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
+    const saved = await page.getByRole('textbox', { name: 'Document source' }).inputValue();
+    assert.match(saved, /System\(banking, "Online Banking", "Allows customers to manage their accounts"\)/);
+    assert.match(saved, /%% c4-text-align c4:customer:label right/);
+  } finally {
+    await browser.close();
+  }
+});
+
+for (const scenario of ['color keeps styling panel open', 'shape and text styles survive download, reopen and reset'] as const) {
+  test(`C4 ${scenario}`, { timeout: 25_000 }, async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      page.setDefaultTimeout(4000);
+      await page.goto(process.env.MERMAID_DRAW_TEST_URL ?? new URL('../../packages/mermaid_draw_web/dist/index.html', import.meta.url).href);
+      const path = examplePath('c4');
+      const feature = 'System context';
+      const example = (value: string) => exampleNamed(openDocument(path, value), feature).source;
+      const original = example(readFileSync(path, 'utf8'));
+      const open = page.getByLabel('Open Markdown or Mermaid file');
+      await open.setInputFiles(path);
+      const tab = page.getByRole('tab', { name: feature, exact: true });
+      const canvas = page.getByRole('tabpanel').locator('.excalidraw');
+      const download = page.getByRole('button', { name: 'Download', exact: true });
+      const sourceValue = async () => {
+        await page.getByRole('tab', { name: 'SOURCE', exact: true }).click();
+        return example(await page.getByRole('textbox', { name: 'Document source' }).inputValue());
+      };
+      const selectBank = async (source: string) => {
+        await tab.click();
+        await download.and(page.locator(':enabled')).waitFor();
+        const bounds = await canvas.boundingBox();
+        assert.ok(bounds);
+        const boxes = readMappedDiagram(source)!.elements.filter((element) =>
+          element.type === 'rectangle' || element.type === 'ellipse');
+        const bank = boxes.find(({ id }) => id === 'c4:banking')!;
+        const midX = (Math.min(...boxes.map(({ x }) => x)) + Math.max(...boxes.map(({ x, width }) => x + width!))) / 2;
+        const midY = (Math.min(...boxes.map(({ y }) => y)) + Math.max(...boxes.map(({ y, height }) => y + height!))) / 2;
+        await page.mouse.click(bounds.x + bounds.width / 2 - midX + bank.x + bank.width! / 2,
+          bounds.y + bounds.height / 2 - midY + bank.y + bank.height! - 8);
+      };
+      await selectBank(original);
+      const option = (group: string, title: string) =>
+        canvas.getByRole('group', { name: group, exact: true }).locator(`[title="${title}"]`);
+
+      if (scenario === 'color keeps styling panel open') {
+        await canvas.getByTestId('color-top-pick-#ffc9c9').click();
+        await option('Stroke width', 'Extra bold').waitFor();
+        await canvas.getByTestId('color-top-pick-#e03131').click();
+        await option('Stroke width', 'Extra bold').waitFor();
+        const box = readMappedDiagram(await sourceValue())!.elements.find(({ id }) => id === 'c4:banking');
+        assert.equal(box?.backgroundColor, '#ffc9c9');
+        assert.equal(box?.strokeColor, '#e03131');
+        return;
+      }
+
+      await option('Stroke width', 'Extra bold').click();
+      await option('Stroke style', 'Dotted').click();
+      await option('Sloppiness', 'Cartoonist').click();
+      await option('Fill', 'Cross-hatch').click();
+      await option('Edges', 'Round').click();
+      await canvas.getByRole('group', { name: 'Font family', exact: true }).getByRole('button', { name: 'Normal', exact: true }).click();
+      await option('Font size', 'Large').click();
+      await option('Text align', 'Right').click();
+      const opacity = canvas.getByRole('slider');
+      await opacity.focus();
+      await opacity.press('ArrowLeft');
+      const pending = page.waitForEvent('download');
+      await download.click();
+      const exported = readFileSync((await (await pending).path())!, 'utf8');
+      const persisted = example(exported);
+      const elements = readMappedDiagram(persisted)!.elements;
+      const box = elements.find(({ id }) => id === 'c4:banking')!;
+      assert.deepEqual([box.opacity, box.fillStyle, box.strokeWidth, box.strokeStyle, box.roughness, box.roundness?.type],
+        [90, 'cross-hatch', 4, 'dotted', 2, 3]);
+      for (const id of ['c4:banking:label', 'c4:banking:description']) {
+        const field = elements.find((element) => element.type === 'text' && element.id === id)!;
+        assert.deepEqual([field.opacity, field.fontFamily, field.fontSize, field.textAlign], [90, 6, 28, 'right']);
+      }
+      await open.setInputFiles({ name: 'restyled-c4.md', mimeType: 'text/markdown', buffer: Buffer.from(exported) });
+      await page.getByRole('heading', { name: 'restyled-c4.md' }).waitFor();
+      await selectBank(persisted);
+      assert.equal(await option('Font size', 'Large').locator('input').isChecked(), true);
+      assert.equal(await option('Text align', 'Right').locator('input').isChecked(), true);
+      await page.getByRole('button', { name: 'Reset styles' }).click();
+      assert.equal(await sourceValue(), original);
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
 test('requirement field edits and repeated moves survive download, reopen and reset', { timeout: 25_000 }, async () => {
   const browser = await chromium.launch();
   try {

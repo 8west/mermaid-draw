@@ -9,6 +9,7 @@ import { exampleNamed, examplePath } from '../diagrams/examples.ts';
 for (const [type, header] of Object.entries({
   flowchart: /^(?:flowchart|graph)\b/, sequence: /^sequenceDiagram$/, class: /^classDiagram$/,
   state: /^stateDiagram(?:-v2)?$/, 'entity-relationship': /^erDiagram$/, requirement: /^requirementDiagram$/,
+  c4: /^C4(?:Context|Container|Component|Dynamic|Deployment)$/,
 })) {
   test(`every ${type} example opens as a named editable diagram`, () => {
     const path = examplePath(type);

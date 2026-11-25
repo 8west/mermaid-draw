@@ -16,15 +16,18 @@ Edit Mermaid diagrams on an Excalidraw canvas without leaving the editor.
 | Flowchart | Move and resize nodes, edit labels and relationships, and change node styling. |
 | Sequence (partial) | Edit aliases, `->>` and `-->>` message labels, and single-line notes. Change colors and save exact drag positions. Dragging past another row changes source order; participant reordering requires all participants to be explicitly declared. Activations (`activate`/`deactivate`, `+`/`-`) draw read-only bars and follow their message. |
 | Class (partial) | Edit class labels, existing members, relationship labels, and standalone or class-attached notes. Move class boxes and change fill, outline, and text colors. Relationships follow class moves; their operators and multiplicities are preserved. |
-| State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Includes composite states, concurrent regions, notes, and start/end markers. |
-| Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Includes nested subgraphs. |
+| State (partial) | Edit state and transition labels, move and color states, and style transition strokes. Add or delete states and transitions. Draw dashed rectangles for composite states and dashed lines for concurrent regions. |
+| Entity relationship (partial) | Edit entity aliases, attributes, and relationship labels. Move and color entities, and add or delete entities and relationships. Draw dashed rectangles for nested subgraphs. |
 | Requirement (partial) | Edit requirement and element fields and typed relationships. Move, color, or delete boxes. Draw rectangles for new requirements and arrows for `traces` links. Choose Sharp, Curved, or Elbow for connectors. Create elements and change declaration names or kinds in source. |
+| C4 (partial) | Edit element fields, relationships, positions, and styling in all five legacy C4 diagram kinds. Draw rectangles for elements, dashed rectangles for boundaries, and arrows for `Rel` relationships. |
 
-For supported class, sequence, state, entity relationship, and requirement connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments without changing the connector's meaning.
+For supported class, sequence, state, entity relationship, requirement, and C4 connectors, stroke color, width, pattern, opacity, and roughness are saved as Mermaid comments without changing the connector's meaning.
+
+C4 descriptions wrap inside their nodes. Person ovals default to centered text with editable alignment. Node fill, stroke, opacity, corners where available, and text styling survive save and reopen. The styling panel stays open after color changes.
 
 Class notes support moves, fill/stroke/text colors, fill patterns, stroke width/pattern, roughness, opacity, rounded corners, and font/alignment controls. Formatting uses adjacent `%% class-note` comments. Resizing, rotation, note creation/deletion, and layer changes remain unsupported. See the [editing test matrix](https://github.com/8west/mermaid-draw/blob/master/.scratch/mermaiddraw-roadmap/diagram-type-support-plan.md#verified-editing-coverage) for verification limits.
 
-**Reset styles** clears saved sequence and class colors and positions without undoing text edits or reordering. Sequence colors and positions are saved in comments that other Mermaid renderers ignore.
+**Reset styles** clears saved canvas formatting for supported diagrams while preserving text edits and diagram structure. Sequence and C4 save canvas-only appearance in Mermaid comments.
 
 Other diagram types and blocks with unsupported syntax are shown as read-only source and preserved.
 

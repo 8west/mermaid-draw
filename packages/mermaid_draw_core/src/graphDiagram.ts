@@ -20,7 +20,10 @@ export type GraphCanvasElement = Point & {
 type TextSlot = { line: number; text: string; write: (text: string) => string };
 type Direction = 'LR' | 'RL' | 'TB' | 'BT';
 type GraphType = 'state' | 'entity' | 'requirement';
-type Scope = { key: string; parent?: Node; regions: Node[][]; regionEnds: number[]; direction?: Direction; start: number; end: number };
+type Scope = {
+  key: string; parent?: Node; regions: Node[][]; regionEnds: number[]; separatorLines: number[];
+  direction?: Direction; start: number; end: number;
+};
 type Node = {
   id: string; name: string; scope: Scope; region: number; kind: 'box' | 'start' | 'end' | 'choice' | 'bar' | 'note';
   declarations: number[]; label?: TextSlot; fields: TextSlot[]; child?: Scope; classes: string[];
@@ -110,7 +113,7 @@ function paintOf(properties: string): Paint {
 function parseGraph(lines: string[], header: number, type: GraphType): Graph | undefined {
   const state = type === 'state';
   const end = lines.at(-1) === '' ? lines.length - 1 : lines.length;
-  const root: Scope = { key: '', regions: [[]], regionEnds: [end], start: header, end };
+  const root: Scope = { key: '', regions: [[]], regionEnds: [end], separatorLines: [], start: header, end };
   const nodes = new Map<string, Node>();
   const edges: Edge[] = [];
   const definitions = new Map<string, Paint>();
@@ -230,6 +233,7 @@ function parseGraph(lines: string[], header: number, type: GraphType): Graph | u
     if (state && body === '--') {
       if (!scope.parent) return;
       scope.regionEnds[region] = line;
+      scope.separatorLines.push(line);
       region++;
       scope.regions.push([]);
       continue;
@@ -275,7 +279,7 @@ function parseGraph(lines: string[], header: number, type: GraphType): Graph | u
       if (!node.insertLabel) node.insertLabel = (value) => `state "${value}" as ${node.reference}`;
       if (opens) {
         if (node.child) return;
-        scope = node.child = { key: node.id, parent: node, regions: [[]], regionEnds: [], start: line, end: -1 };
+        scope = node.child = { key: node.id, parent: node, regions: [[]], regionEnds: [], separatorLines: [], start: line, end: -1 };
         region = 0;
       }
     } else {
@@ -317,7 +321,7 @@ function parseGraph(lines: string[], header: number, type: GraphType): Graph | u
       if (group) {
         if (node.child) return;
         if (!alias) node.label = slot(node.name, (value) => `subgraph ${id} ["${value}"]`);
-        scope = node.child = { key: node.id, parent: node, regions: [[]], regionEnds: [], start: line, end: -1 };
+        scope = node.child = { key: node.id, parent: node, regions: [[]], regionEnds: [], separatorLines: [], start: line, end: -1 };
       } else {
         if (!alias && !node.label) node.label = slot(node.name, (value) => body.replace(id, () => `${id}["${value}"]`));
         if (declaration?.[3]) fieldOwner = node;
@@ -365,7 +369,7 @@ function stateOrder(region: Node[], outgoing: Map<Node, Node[]>): Node[] {
   return [...ordered, ...region.filter(({ kind }) => kind === 'end' || kind === 'note')];
 }
 
-function layout(scope: Scope, origin: Point, saved: Map<string, Point>, boxes: Map<string, Bounds>,
+function layout(scope: Scope, origin: Point, saved: Map<string, Point>, sizes: Map<string, Pick<Bounds, 'width' | 'height'>>, boxes: Map<string, Bounds>,
   outgoing?: Map<Node, Node[]>): Bounds {
   const horizontal = scope.direction === 'LR' || scope.direction === 'RL';
   const reverse = scope.direction === 'RL' || scope.direction === 'BT';
@@ -379,10 +383,12 @@ function layout(scope: Scope, origin: Point, saved: Map<string, Point>, boxes: M
       let width = node.kind === 'box' || node.kind === 'note' ? Math.max(measure(labelOf(node)), ...node.fields.map(({ text }) => widthOf(text))) : 32;
       let height = node.kind === 'bar' ? 12 : node.kind === 'box' || node.kind === 'note' ? 48 + node.fields.length * 25 : 32;
       if (node.child) {
-        const inner = layout(node.child, { x: x + 24, y: y + 56 }, saved, boxes, outgoing);
+        const inner = layout(node.child, { x: x + 24, y: y + 56 }, saved, sizes, boxes, outgoing);
         width = Math.max(width, inner.x + inner.width - x + 24);
         height = Math.max(84, inner.y + inner.height - y + 24);
       }
+      const savedSize = sizes.get(node.id);
+      if (savedSize) { width = Math.max(width, savedSize.width); height = Math.max(height, savedSize.height); }
       boxes.set(node.id, { x, y, width, height });
       along += (horizontal ? width : height) + 100;
       thickness = Math.max(thickness, horizontal ? height : width);
@@ -490,7 +496,8 @@ function elbowPoints(points: [number, number][], startsHorizontal: boolean, ends
   return result;
 }
 
-function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map<string, Paint>, type: GraphType,
+function graphElements(graph: Graph, positions: Map<string, Point>, sizes: Map<string, Pick<Bounds, 'width' | 'height'>>,
+  palette: Map<string, Paint>, type: GraphType,
   transitionStyles: Map<string, ConnectorStyle>, routes: Map<string, SavedRoute>) {
   const state = type === 'state';
   const boxes = new Map<string, Bounds>();
@@ -503,7 +510,7 @@ function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map
     if (successors) successors.push(edge.to);
     else outgoing.set(edge.from, [edge.to]);
   }
-  layout(graph.root, { x: 0, y: 0 }, positions, boxes, outgoing);
+  layout(graph.root, { x: 0, y: 0 }, positions, sizes, boxes, outgoing);
   const orderedNodes = (scope: Scope): Node[] => scope.regions.flat().flatMap((node) =>
     [node, ...(node.child ? orderedNodes(node.child) : [])]);
   for (const node of orderedNodes(graph.root)) {
@@ -533,6 +540,30 @@ function graphElements(graph: Graph, positions: Map<string, Point>, palette: Map
         x: x + 12, y: y + 44 + index * 25, fontSize: 16, fontFamily: 3, groupIds, ...(paint.color && { strokeColor: paint.color }) });
     }
   }
+  const addRegionSeparators = (scope: Scope) => {
+    if (scope.parent) {
+      const owner = boxes.get(scope.parent.id)!;
+      const horizontalFlow = scope.direction === 'LR' || scope.direction === 'RL';
+      for (let index = 0; index < scope.separatorLines.length; index++) {
+        const previous = scope.regions[index].map(({ id }) => boxes.get(id)!).filter(Boolean);
+        const next = scope.regions[index + 1].map(({ id }) => boxes.get(id)!).filter(Boolean);
+        const previousEdge = horizontalFlow
+          ? Math.max(owner.y + 48, ...previous.map(({ y, height }) => y + height))
+          : Math.max(owner.x + 24, ...previous.map(({ x, width }) => x + width));
+        const nextEdge = horizontalFlow
+          ? Math.min(owner.y + owner.height - 12, ...next.map(({ y }) => y))
+          : Math.min(owner.x + owner.width - 12, ...next.map(({ x }) => x));
+        const across = (previousEdge + nextEdge) / 2;
+        elements.push(horizontalFlow
+          ? { id: `${scope.key}:region:${index}`, type: 'line', x: owner.x + 12, y: across,
+            width: owner.width - 24, height: 0, points: [[0, 0], [owner.width - 24, 0]], strokeStyle: 'dashed', ...shape }
+          : { id: `${scope.key}:region:${index}`, type: 'line', x: across, y: owner.y + 42,
+            width: 0, height: owner.height - 54, points: [[0, 0], [0, owner.height - 54]], strokeStyle: 'dashed', ...shape });
+      }
+    }
+    for (const node of scope.regions.flat()) if (node.child) addRegionSeparators(node.child);
+  };
+  if (state) addRegionSeparators(graph.root);
   const connectors: Skeleton[] = [];
   const parallel = new Map<string, number>();
   for (const edge of graph.edges) {
@@ -587,6 +618,7 @@ export function readGraphDiagram(source: string, lines: string[], header: number
   const graph = parseGraph(lines, header, type);
   if (!graph) return;
   const positions = new Map<string, Point>();
+  const sizes = new Map<string, Pick<Bounds, 'width' | 'height'>>();
   const palette = new Map<string, Paint>();
   const formatting = new Map<string, number>();
   const nativeStyles = new Map<string, number>();
@@ -620,7 +652,7 @@ export function readGraphDiagram(source: string, lines: string[], header: number
       palette.set(node.id, paint);
       continue;
     }
-    const metadata = lines[line].trim().match(/^%% (graph-layout|graph-style) (\S+) (.+)$/);
+    const metadata = lines[line].trim().match(/^%% (graph-layout|graph-size|graph-style) (\S+) (.+)$/);
     if (!metadata || !graph.nodes.has(metadata[2])) continue;
     const [, directive, id, value] = metadata;
     if (directive === 'graph-layout') {
@@ -629,6 +661,12 @@ export function readGraphDiagram(source: string, lines: string[], header: number
       const [x, y] = coordinates.slice(1).map(Number);
       if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) continue;
       positions.set(id, { x, y });
+    } else if (directive === 'graph-size') {
+      const dimensions = value.match(/^(\d+) (\d+)$/);
+      if (!dimensions) continue;
+      const [width, height] = dimensions.slice(1).map(Number);
+      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) continue;
+      sizes.set(id, { width, height });
     } else {
       const paint = paintOf(value);
       if (!Object.keys(paint).length) continue;
@@ -636,7 +674,7 @@ export function readGraphDiagram(source: string, lines: string[], header: number
     }
     formatting.set(`${directive} ${id}`, line);
   }
-  const elements = graphElements(graph, positions, palette, type, transitionStyles, routes);
+  const elements = graphElements(graph, positions, sizes, palette, type, transitionStyles, routes);
   return {
     elements,
     resetFormatting: () => {
@@ -678,7 +716,7 @@ export function readGraphDiagram(source: string, lines: string[], header: number
           for (let line = node.child.start; line <= node.child.end; line++) removed.add(line);
           for (const nested of node.child.regions.flat()) removeNode(nested);
         }
-        for (const directive of ['graph-layout', 'graph-style']) {
+        for (const directive of ['graph-layout', 'graph-size', 'graph-style']) {
           const line = formatting.get(`${directive} ${node.id}`);
           if (line !== undefined) removed.add(line);
         }
@@ -686,6 +724,33 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         if (native !== undefined) { removed.add(native); removed.add(native + 1); }
       };
       for (const node of graph.nodes.values()) if (base.has(node.id) && !live.has(node.id) && !deleted.has(node)) removeNode(node);
+      const scopes: Scope[] = [graph.root];
+      for (let index = 0; index < scopes.length; index++) {
+        for (const node of scopes[index].regions.flat()) if (node.child) scopes.push(node.child);
+      }
+      const deletedSeparators = new Map<Scope, number[]>();
+      if (state) for (const scope of scopes) {
+        for (const [index, line] of scope.separatorLines.entries()) {
+          if (base.has(`${scope.key}:region:${index}`) && !live.has(`${scope.key}:region:${index}`)) {
+            removed.add(line);
+            deletedSeparators.set(scope, [...deletedSeparators.get(scope) ?? [], index]);
+          }
+        }
+      }
+      for (const [scope, separators] of deletedSeparators) {
+        for (const node of scope.regions.flat()) {
+          const shift = separators.filter((index) => index < node.region).length;
+          if (!shift) continue;
+          const prefix = `state:${scope.key}/${node.region}/`;
+          const id = node.id.replace(prefix, `state:${scope.key}/${node.region - shift}/`);
+          for (const directive of ['graph-layout', 'graph-size', 'graph-style']) {
+            const line = formatting.get(`${directive} ${node.id}`);
+            if (line !== undefined) output[line] = output[line].replace(node.id, id);
+          }
+          const native = nativeStyles.get(node.id);
+          if (native !== undefined) output[native] = output[native].replace(node.id, id);
+        }
+      }
 
       for (const node of graph.nodes.values()) {
         if (deleted.has(node)) continue;
@@ -719,6 +784,10 @@ export function readGraphDiagram(source: string, lines: string[], header: number
         }
         if (Math.round(delta.x) || Math.round(delta.y) || (positions.has(node.id) && (Math.round(inherited.x) || Math.round(inherited.y)))) {
           save('graph-layout', node.id, `${Math.round(next.x + (delta.x ? 0 : inherited.x))} ${Math.round(next.y + (delta.y ? 0 : inherited.y))}`);
+        }
+        if (node.child && next.width !== undefined && next.height !== undefined && previous.width !== undefined && previous.height !== undefined &&
+          (Math.round(next.width - previous.width) || Math.round(next.height - previous.height))) {
+          save('graph-size', node.id, `${Math.round(next.width)} ${Math.round(next.height)}`);
         }
         const paint = { ...palette.get(node.id) };
         let changed = false;
@@ -822,6 +891,21 @@ export function readGraphDiagram(source: string, lines: string[], header: number
           element.y + (element.height ?? 0) < box.y + box.height;
       }).sort((a, b) => b.child!.start - a.child!.start)[0]?.child;
       const indentFor = (scope: Scope) => scope.parent ? `${lineIndent(lines[scope.end])}    ` : '';
+      if (state) for (const element of live.values()) {
+        if (base.has(element.id) || element.type !== 'line' || element.strokeStyle !== 'dashed' || !element.points?.length) continue;
+        const [lastX, lastY] = element.points.at(-1)!;
+        const end = { x: element.x + lastX, y: element.y + lastY };
+        const owner = [...graph.nodes.values()].filter((node) => {
+          const box = live.get(node.id);
+          if (!node.child || box?.width === undefined || box.height === undefined) return false;
+          const { x, y, width, height } = box;
+          return [element, end].every((point) => point.x > x && point.x < x + width &&
+            point.y > y + 38 && point.y < y + height);
+        }).sort((a, b) => b.child!.start - a.child!.start)[0];
+        if (!owner?.child) throw new Error('Draw a dashed region separator inside a composite state.');
+        const scope = owner.child;
+        insert(scope.regionEnds.at(-1) ?? scope.end, `${indentFor(scope)}--`);
+      }
       if (!state) {
         const newFields = new Map<Node, string[]>();
         const boundText = new Set([...live.values()].flatMap((element) =>
@@ -856,16 +940,25 @@ export function readGraphDiagram(source: string, lines: string[], header: number
       for (const element of live.values()) {
         if (base.has(element.id) || element.type !== 'rectangle') continue;
         let index = 1;
-        const prefix = state ? 'State' : type === 'requirement' ? 'Requirement' : 'Entity';
+        const group = element.strokeStyle === 'dashed' && type !== 'requirement';
+        const prefix = group ? state ? 'Composite' : 'Subgraph'
+          : state ? 'State' : type === 'requirement' ? 'Requirement' : 'Entity';
         while (ids.has(`${prefix}${index}`)) index++;
         const reference = `${prefix}${index}`;
         ids.add(reference);
         const scope = containing(element) ?? graph.root;
         const region = scope.regions.length - 1;
         created.set(element.id, { reference, scope, region });
-        insert(scope.regionEnds[region], type === 'requirement' ? `requirement ${reference} {\n    id: ${reference}\n    text: "New requirement"\n}` : `${indentFor(scope)}${reference}`);
+        const indent = indentFor(scope);
+        insert(scope.regionEnds[region], type === 'requirement' ? `requirement ${reference} {\n    id: ${reference}\n    text: "New requirement"\n}`
+          : group ? state ? `${indent}state ${reference} {\n${indent}}`
+            : `${indent}subgraph ${reference} ["${reference}"]\n${indent}end`
+          : `${indent}${reference}`);
         const id = state ? `state:${scope.key}/${region}/${reference}` : `${type}:${reference}`;
         save('graph-layout', id, `${Math.round(element.x)} ${Math.round(element.y)}`);
+        if (group && element.width !== undefined && element.height !== undefined) {
+          save('graph-size', id, `${Math.round(element.width)} ${Math.round(element.height)}`);
+        }
       }
       const resolve = (id?: string) => id ? graph.nodes.get(id) ?? created.get(id) : undefined;
       for (const element of live.values()) {
